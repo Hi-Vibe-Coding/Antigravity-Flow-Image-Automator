@@ -73,6 +73,8 @@ const btnPasteClipboard = document.getElementById('btnPasteClipboard');
 const btnPickOutputDir = document.getElementById('btnPickOutputDir');
 const btnClearCompleted = document.getElementById('btnClearCompleted');
 const btnClearAllTasks = document.getElementById('btnClearAllTasks');
+const chkOverwriteOriginal = document.getElementById('chkOverwriteOriginal');
+const chkNumericNameOnly = document.getElementById('chkNumericNameOnly');
 const fileInputFallback = document.getElementById('fileInputFallback');
 const dirStatusText = document.getElementById('dirStatusText');
 const imageTaskList = document.getElementById('imageTaskList');
@@ -114,8 +116,13 @@ const dialogJsonPre = document.getElementById('dialogJsonPre');
 const btnCopyDialogJson = document.getElementById('btnCopyDialogJson');
 const copyFeedback = document.getElementById('copyFeedback');
 
+const completionDialog = document.getElementById('completionDialog');
+const completionMainText = document.getElementById('completionMainText');
+const completionTotalTime = document.getElementById('completionTotalTime');
+const completionAvgTime = document.getElementById('completionAvgTime');
+
 // Mandatory fallback for browsers without <dialog closedby="any"> support
-for (const dlg of [reportDialog, previewDialog]) {
+for (const dlg of [reportDialog, previewDialog, completionDialog]) {
   if (dlg && !('closedBy' in HTMLDialogElement.prototype)) {
     dlg.addEventListener('click', (event) => {
       if (event.target !== dlg) return;
@@ -178,9 +185,7 @@ async function restoreDirHandlesFromDb() {
     });
     db.close();
     for (const rec of records) {
-      if (rec.key === 'outputDirHandle' && rec.handle) {
-        appState.outputDirHandle = rec.handle;
-      } else if (rec.key === 'inputDirHandle' && rec.handle) {
+      if (rec.key === 'inputDirHandle' && rec.handle) {
         appState.inputDirHandle = rec.handle;
       }
     }
@@ -189,22 +194,38 @@ async function restoreDirHandlesFromDb() {
   }
 }
 
-async function ensureOutputDirPermission() {
-  if (!appState.outputDirHandle) return false;
+async function ensureDirReadWritePermission(dirHandle) {
+  if (!dirHandle) return false;
   try {
-    if (typeof appState.outputDirHandle.queryPermission === 'function') {
-      let perm = await appState.outputDirHandle.queryPermission({ mode: 'readwrite' });
+    if (typeof dirHandle.queryPermission === 'function') {
+      let perm = await dirHandle.queryPermission({ mode: 'readwrite' });
       if (perm === 'granted') return true;
-      if (typeof appState.outputDirHandle.requestPermission === 'function') {
-        perm = await appState.outputDirHandle.requestPermission({ mode: 'readwrite' });
+      if (typeof dirHandle.requestPermission === 'function') {
+        perm = await dirHandle.requestPermission({ mode: 'readwrite' });
         return perm === 'granted';
       }
     }
     return true;
   } catch (err) {
-    console.warn('[Workbench Save] Output directory permission check failed:', err);
+    console.warn('[Workbench Save] Directory readwrite permission check failed:', err);
     return false;
   }
+}
+
+async function ensureOutputDirPermission() {
+  const handlesToVerify = new Set();
+  if (appState.inputDirHandle) handlesToVerify.add(appState.inputDirHandle);
+  for (const t of appState.tasks) {
+    if (t.status === 'PENDING' && t.sourceDirHandle) {
+      handlesToVerify.add(t.sourceDirHandle);
+    }
+  }
+  if (appState.outputDirHandle) handlesToVerify.add(appState.outputDirHandle);
+
+  for (const h of handlesToVerify) {
+    await ensureDirReadWritePermission(h);
+  }
+  return true;
 }
 
 async function saveTaskToDb(task, orderIndex = 0) {
@@ -214,10 +235,12 @@ async function saveTaskToDb(task, orderIndex = 0) {
       id: task.id,
       orderIndex,
       name: task.name,
+      relativePath: task.relativePath || task.name,
       size: task.size,
       mimeType: task.mimeType || 'image/png',
       status: task.status,
       sourceBlob: task.sourceBlob || null,
+      sourceDirHandle: task.sourceDirHandle || null,
       enhancedBlob: task.enhancedBlob || null,
       outputFileName: task.outputFileName || null,
       uploadedMediaId: task.uploadedMediaId || null,
@@ -548,9 +571,28 @@ function inferMimeType(filename, fileType) {
   return 'image/png';
 }
 
-function buildOutputFileName(origName, resolution = '2K', mimeType = 'image/jpeg') {
+function isOverwriteModeEnabled() {
+  return chkOverwriteOriginal ? Boolean(chkOverwriteOriginal.checked) : true;
+}
+
+function isNumericFilterEnabled() {
+  return chkNumericNameOnly ? Boolean(chkNumericNameOnly.checked) : true;
+}
+
+function isPureNumericImageName(filename) {
+  const base = String(filename || '')
+    .trim()
+    .replace(/\.[^.]+$/, '');
+  return /^\d+$/.test(base);
+}
+
+function buildOutputFileName(origName, resolution = '2K', mimeType = 'image/jpeg', overwriteOverride = null) {
   const base = origName.replace(/\.[^.]+$/, '');
-  const ext = mimeType === 'image/png' ? 'png' : 'jpg';
+  const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg';
+  const useOverwrite = overwriteOverride !== null ? overwriteOverride : isOverwriteModeEnabled();
+  if (useOverwrite) {
+    return `${base}.${ext}`;
+  }
   return `${base}_enhanced_${resolution}.${ext}`;
 }
 
@@ -579,11 +621,27 @@ function createNamedClipboardFile(blobOrFile) {
 }
 
 async function extractFilesFromDataTransfer(dataTransfer) {
-  if (!dataTransfer) return [];
+  if (!dataTransfer) return { files: [], dirHandle: null };
   const collected = [];
+  let droppedDirHandle = null;
+
+  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+
+  // Try modern File System Access API getAsFileSystemHandle() to capture directory handle if a folder is dropped
+  for (const item of items) {
+    if (item.kind === 'file' && typeof item.getAsFileSystemHandle === 'function') {
+      try {
+        const handle = await item.getAsFileSystemHandle();
+        if (handle && handle.kind === 'directory' && !droppedDirHandle) {
+          droppedDirHandle = handle;
+        }
+      } catch {
+        // Ignore
+      }
+    }
+  }
 
   // Support dragged directories via webkitGetAsEntry if available
-  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
   const entries = items
     .filter((item) => item.kind === 'file' && typeof item.webkitGetAsEntry === 'function')
     .map((item) => item.webkitGetAsEntry())
@@ -617,7 +675,10 @@ async function extractFilesFromDataTransfer(dataTransfer) {
       await readEntry(entry);
     }
     if (collected.length > 0) {
-      return collected.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      return {
+        files: collected.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+        dirHandle: droppedDirHandle
+      };
     }
   }
 
@@ -629,18 +690,58 @@ async function extractFilesFromDataTransfer(dataTransfer) {
       }
     }
   }
-  return collected.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  return {
+    files: collected.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+    dirHandle: droppedDirHandle
+  };
 }
 
-async function addFilesToTaskList(fileList) {
+async function scanDirectoryHandleForImages(rootDirHandle) {
+  const results = [];
+  async function walkDir(currentDirHandle, relPrefix = '') {
+    const entries = [];
+    for await (const entry of currentDirHandle.values()) {
+      entries.push(entry);
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    for (const entry of entries) {
+      if (entry.kind === 'file' && isSupportedImageFile(entry.name)) {
+        const file = await entry.getFile();
+        results.push({
+          file,
+          dirHandle: currentDirHandle,
+          relativePath: relPrefix ? `${relPrefix}/${entry.name}` : entry.name
+        });
+      } else if (entry.kind === 'directory') {
+        await walkDir(entry, relPrefix ? `${relPrefix}/${entry.name}` : entry.name);
+      }
+    }
+  }
+  await walkDir(rootDirHandle, '');
+  return results;
+}
+
+async function addFilesToTaskList(fileList, defaultSourceDirHandle = null, options = {}) {
   let addedCount = 0;
-  for (const rawFile of fileList) {
+  const enforceNumeric = isNumericFilterEnabled() && !options.skipNumericFilter;
+
+  for (const item of fileList) {
+    const rawFile = item && item.file instanceof File ? item.file : item;
+    const itemDirHandle = (item && item.dirHandle) || defaultSourceDirHandle || null;
+    const relativePath = (item && item.relativePath) || rawFile.name || '';
+
     const hasValidExt = isSupportedImageFile(rawFile.name || '');
     const isImageMime = Boolean(rawFile.type && rawFile.type.startsWith('image/'));
     if (!hasValidExt && !isImageMime) continue;
 
     const file = hasValidExt ? rawFile : createNamedClipboardFile(rawFile);
-    const exists = appState.tasks.some((t) => t.name === file.name && t.size === file.size);
+    if (enforceNumeric && !isPureNumericImageName(file.name)) {
+      continue;
+    }
+
+    const exists = appState.tasks.some(
+      (t) => (t.relativePath || t.name) === (relativePath || file.name) && t.size === file.size
+    );
     if (exists) continue;
 
     const sourceBlob = new Blob([await file.arrayBuffer()], {
@@ -650,9 +751,11 @@ async function addFilesToTaskList(fileList) {
     const newTask = {
       id: `task_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       name: file.name,
+      relativePath: relativePath || file.name,
       size: file.size,
       mimeType: sourceBlob.type,
       sourceBlob,
+      sourceDirHandle: itemDirHandle,
       enhancedBlob: null,
       thumbUrl,
       enhancedThumbUrl: '',
@@ -680,13 +783,20 @@ async function addFilesToTaskList(fileList) {
 }
 
 function updateDirStatusBanner() {
+  const hasFolderHandle =
+    Boolean(appState.inputDirHandle) || appState.tasks.some((t) => Boolean(t.sourceDirHandle));
   const inName = appState.inputDirHandle
     ? `文件夹 [${appState.inputDirHandle.name}] (${appState.tasks.length} 张)`
     : `已导入 ${appState.tasks.length} 张商品原图`;
-  const outName = appState.outputDirHandle
-    ? `本地文件夹 [${appState.outputDirHandle.name}] (File System API 直接落盘，不覆盖原图)`
-    : '未绑定文件夹（将通过浏览器下载通道自动保存至系统下载目录 Flow_Enhanced/ 子目录）';
-  dirStatusText.textContent = `原图来源：${inName} | 输出位置：${outName}`;
+  let outName;
+  if (hasFolderHandle) {
+    outName = isOverwriteModeEnabled()
+      ? '在原图文件夹内直接覆盖原图（如 1.png → 写入 1.jpg 并删除 1.png；1.jpg → 直接覆盖 1.jpg）'
+      : `保留原图，在原图文件夹同路径输出（如 1_enhanced_${selectResolution.value || '2K'}.jpg）`;
+  } else {
+    outName = '单图导入（未绑定原图文件夹时将保存至系统下载目录 Flow_Enhanced/ 子目录）';
+  }
+  dirStatusText.textContent = `原图来源：${inName} | 输出方式：${outName}`;
 }
 
 const STATUS_LABELS = {
@@ -801,7 +911,7 @@ function renderTaskList() {
 
     const nameEl = document.createElement('div');
     nameEl.className = 'task-name';
-    nameEl.textContent = `${index + 1}. ${task.name}`;
+    nameEl.textContent = `${index + 1}. ${task.relativePath || task.name}`;
 
     const subEl = document.createElement('div');
     subEl.className = 'task-sub';
@@ -812,9 +922,17 @@ function renderTaskList() {
     subEl.appendChild(stBadge);
 
     const sizeKb = (task.size / 1024).toFixed(1);
-    const outName =
-      task.outputFileName || buildOutputFileName(task.name, selectResolution.value, 'image/jpeg');
-    let detailStr = `${sizeKb} KB | 输出: ${outName}`;
+    const outName = buildOutputFileName(task.name, selectResolution.value, 'image/jpeg');
+    let overwriteDesc;
+    if (isOverwriteModeEnabled()) {
+      overwriteDesc =
+        task.name.toLowerCase() !== outName.toLowerCase()
+          ? `替换为: ${outName} (删除 ${task.name})`
+          : `直接覆盖: ${outName}`;
+    } else {
+      overwriteDesc = `保留原图，同路径输出: ${outName}`;
+    }
+    let detailStr = `${sizeKb} KB | ${overwriteDesc}`;
     if (task.modelUsed) detailStr += ` | 模型: ${task.modelUsed}`;
     if (task.enhancedDimensions) {
       detailStr += ` (${task.enhancedDimensions[0]}×${task.enhancedDimensions[1]})`;
@@ -1206,23 +1324,50 @@ async function verifyAndMeasureImageBlob(blob) {
   return [width, height];
 }
 
-async function saveEnhancedBlobToDisk(blob, outputFileName) {
-  // 1. Prefer user-selected output directory via File System Access API
-  if (appState.outputDirHandle) {
+async function saveEnhancedBlobToDisk(blob, outputFileName, task = null) {
+  // 1. Prefer overwriting in the original image's source folder (or user-selected directory)
+  const targetDirHandle =
+    task?.sourceDirHandle || appState.inputDirHandle || appState.outputDirHandle;
+
+  if (targetDirHandle) {
     try {
-      const fileHandle = await appState.outputDirHandle.getFileHandle(outputFileName, {
+      const hasPerm = await ensureDirReadWritePermission(targetDirHandle);
+      if (!hasPerm) {
+        throw new Error(`未获得原图文件夹 [${targetDirHandle.name}] 的写入权限`);
+      }
+
+      const fileHandle = await targetDirHandle.getFileHandle(outputFileName, {
         create: true
       });
       const writable = await fileHandle.createWritable();
       await writable.write(blob);
       await writable.close();
-      return { savedVia: 'FileSystemAccessAPI', path: `${appState.outputDirHandle.name}/${outputFileName}` };
+
+      // Only in overwrite mode: if original image had a different extension (e.g. 4.png -> 4.jpg), delete the old 4.png after 4.jpg is safely written
+      const origName = task?.name ? String(task.name).trim() : '';
+      if (
+        isOverwriteModeEnabled() &&
+        origName &&
+        origName.toLowerCase() !== outputFileName.toLowerCase() &&
+        typeof targetDirHandle.removeEntry === 'function'
+      ) {
+        try {
+          await targetDirHandle.removeEntry(origName);
+        } catch (delErr) {
+          console.warn(`[Workbench Save] 删除旧格式原图 (${origName}) 失败:`, delErr);
+        }
+      }
+
+      return {
+        savedVia: 'FileSystemAccessAPI',
+        path: `${targetDirHandle.name}/${outputFileName}`
+      };
     } catch (err) {
       console.warn('[Workbench Save] File System Access API write failed, falling back to chrome.downloads:', err);
     }
   }
 
-  // 2. Fallback to chrome.downloads into Flow_Enhanced/ subfolder
+  // 2. Fallback to chrome.downloads into Flow_Enhanced/ subfolder (for loose clipboard/dragged images without folder handle)
   const tempUrl = URL.createObjectURL(blob);
   try {
     const downloadId = await chrome.downloads.download({
@@ -1415,7 +1560,7 @@ async function executeSingleTaskPipeline(task, taskIndex) {
   const measuredDims = await verifyAndMeasureImageBlob(enhancedBlob);
 
   const outputFileName = buildOutputFileName(task.name, selectedResolutionVal, finalMimeType);
-  await saveEnhancedBlobToDisk(enhancedBlob, outputFileName);
+  await saveEnhancedBlobToDisk(enhancedBlob, outputFileName, task);
 
   if (task.enhancedThumbUrl) {
     URL.revokeObjectURL(task.enhancedThumbUrl);
@@ -1503,8 +1648,11 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
   appState.cancelRequested = false;
   renderTaskList();
 
+  const queueRunStartTime = Date.now();
   const maxRetries = Number(selectMaxRetries.value) || 0;
   let processedInThisRun = 0;
+  let failedInThisRun = 0;
+  let attemptedInThisRun = 0;
 
   for (let i = 0; i < appState.tasks.length; i++) {
     const task = appState.tasks[i];
@@ -1523,6 +1671,7 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
       return;
     }
 
+    attemptedInThisRun++;
     let attempt = 0;
     let taskSucceeded = false;
 
@@ -1568,6 +1717,7 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
         if (attempt > maxRetries) {
           task.status = 'FAILED';
           task.errorMsg = msg;
+          failedInThisRun++;
           await saveTaskToDb(task, i);
           renderTaskList();
         }
@@ -1596,8 +1746,54 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
   appState.queueStatus = 'IDLE';
   const totalCompleted = appState.tasks.filter((t) => t.status === 'COMPLETED').length;
   const totalFailed = appState.tasks.filter((t) => t.status === 'FAILED').length;
-  queueLiveStepText.textContent = `队列执行完毕！共成功 ${totalCompleted} 张，失败 ${totalFailed} 张。`;
+  const totalElapsedMs = Math.max(1000, Date.now() - queueRunStartTime);
+  const avgElapsedMs = Math.round(totalElapsedMs / Math.max(1, attemptedInThisRun));
+  queueLiveStepText.textContent = `队列执行完毕！共成功 ${totalCompleted} 张，失败 ${totalFailed} 张（耗时 ${formatDurationChinese(totalElapsedMs)}）。`;
   renderTaskList();
+
+  if (!appState.cancelRequested && attemptedInThisRun > 0) {
+    showQueueCompletionModal({
+      successCount: totalCompleted,
+      failedCount: totalFailed,
+      totalDurationMs: totalElapsedMs,
+      avgDurationMs: avgElapsedMs
+    });
+  }
+}
+
+/**
+ * Formats milliseconds into Chinese duration string, e.g.:
+ * - 1小时2分20秒
+ * - 3分10秒
+ * - 55秒
+ */
+function formatDurationChinese(ms) {
+  const totalSeconds = Math.max(1, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}小时${minutes}分${seconds}秒`;
+  }
+  if (minutes > 0) {
+    return `${minutes}分${seconds}秒`;
+  }
+  return `${seconds}秒`;
+}
+
+function showQueueCompletionModal({ successCount, failedCount, totalDurationMs, avgDurationMs }) {
+  if (!completionDialog) return;
+  if (completionMainText) {
+    completionMainText.textContent = `恭喜成功处理 ${successCount} 张图片，失败了 ${failedCount} 张`;
+  }
+  if (completionTotalTime) {
+    completionTotalTime.textContent = formatDurationChinese(totalDurationMs);
+  }
+  if (completionAvgTime) {
+    completionAvgTime.textContent = formatDurationChinese(avgDurationMs);
+  }
+  completionDialog.showModal();
 }
 
 // ============================================================================
@@ -1612,7 +1808,9 @@ async function initWorkbench() {
     selectedResolution,
     selectedAspect,
     selectedDelay,
-    selectedMaxRetries
+    selectedMaxRetries,
+    overwriteOriginal,
+    numericNameOnly
   } = await chrome.storage.local.get([
     'userPrompt',
     'selectedModel',
@@ -1620,10 +1818,49 @@ async function initWorkbench() {
     'selectedResolution',
     'selectedAspect',
     'selectedDelay',
-    'selectedMaxRetries'
+    'selectedMaxRetries',
+    'overwriteOriginal',
+    'numericNameOnly'
   ]);
 
   promptTextarea.value = userPrompt || DEFAULT_ECOMMERCE_PROMPT;
+
+  if (chkOverwriteOriginal) {
+    chkOverwriteOriginal.checked = overwriteOriginal !== undefined ? Boolean(overwriteOriginal) : true;
+    chkOverwriteOriginal.addEventListener('change', () => {
+      chrome.storage.local.set({ overwriteOriginal: chkOverwriteOriginal.checked });
+      renderTaskList();
+      updateDirStatusBanner();
+    });
+  }
+
+  if (chkNumericNameOnly) {
+    chkNumericNameOnly.checked = numericNameOnly !== undefined ? Boolean(numericNameOnly) : true;
+    chkNumericNameOnly.addEventListener('change', async () => {
+      chrome.storage.local.set({ numericNameOnly: chkNumericNameOnly.checked });
+      if (chkNumericNameOnly.checked) {
+        const kept = [];
+        let removedCount = 0;
+        for (const t of appState.tasks) {
+          if (t.status === 'PENDING' && !isPureNumericImageName(t.name)) {
+            if (t.thumbUrl) URL.revokeObjectURL(t.thumbUrl);
+            if (t.enhancedThumbUrl) URL.revokeObjectURL(t.enhancedThumbUrl);
+            await deleteTaskFromDb(t.id);
+            removedCount++;
+          } else {
+            kept.push(t);
+          }
+        }
+        if (removedCount > 0) {
+          appState.tasks = kept;
+          await saveAllTasksOrderToDb();
+          queueLiveStepText.textContent = `已开启“只处理纯数字图片”，自动移除了 ${removedCount} 张非纯数字命名的待处理图片。`;
+        }
+      }
+      renderTaskList();
+      updateDirStatusBanner();
+    });
+  }
 
   const VALID_MODELS = new Set(['BELUGA', 'GEM_PIX_2', 'HARBOR_SEAL']);
   const VALID_RESOLUTIONS = new Set(['2K', '1K']);
@@ -1822,18 +2059,11 @@ async function initWorkbench() {
       return;
     }
     try {
-      const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+      const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
       appState.inputDirHandle = dirHandle;
       await saveDirHandleToDb('inputDirHandle', dirHandle);
-      const files = [];
-      for await (const entry of dirHandle.values()) {
-        if (entry.kind === 'file' && isSupportedImageFile(entry.name)) {
-          const file = await entry.getFile();
-          files.push(file);
-        }
-      }
-      files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-      await addFilesToTaskList(files);
+      const scannedItems = await scanDirectoryHandleForImages(dirHandle);
+      await addFilesToTaskList(scannedItems, dirHandle);
     } catch (err) {
       if (err.name !== 'AbortError') {
         console.warn('Directory picker error:', err);
@@ -1901,9 +2131,23 @@ async function initWorkbench() {
       dragEnterDepth = 0;
       setDragHighlight(false);
 
-      const droppedFiles = await extractFilesFromDataTransfer(e.dataTransfer);
+      const { files: droppedFiles, dirHandle: droppedDirHandle } =
+        await extractFilesFromDataTransfer(e.dataTransfer);
+      if (droppedDirHandle) {
+        appState.inputDirHandle = droppedDirHandle;
+        await saveDirHandleToDb('inputDirHandle', droppedDirHandle);
+        const scannedItems = await scanDirectoryHandleForImages(droppedDirHandle);
+        if (scannedItems.length > 0) {
+          const added = await addFilesToTaskList(scannedItems, droppedDirHandle);
+          queueLiveStepText.textContent = `已通过拖拽文件夹导入 ${added} 张图片（共识别 ${scannedItems.length} 张图片文件）。`;
+          return;
+        }
+      }
       if (droppedFiles.length > 0) {
-        const added = await addFilesToTaskList(droppedFiles);
+        const added = await addFilesToTaskList(
+          droppedFiles,
+          droppedDirHandle || appState.inputDirHandle
+        );
         queueLiveStepText.textContent = `已通过拖拽导入 ${added} 张图片（共识别 ${droppedFiles.length} 张图片文件）。`;
       } else {
         queueLiveStepText.textContent = '拖拽内容中未检测到支持的图片文件（支持 JPG、JPEG、PNG、WebP）。';
@@ -1940,7 +2184,7 @@ async function initWorkbench() {
     if (imageFiles.length === 0) return;
 
     e.preventDefault();
-    const added = await addFilesToTaskList(imageFiles);
+    const added = await addFilesToTaskList(imageFiles, null, { skipNumericFilter: true });
     if (added > 0) {
       queueLiveStepText.textContent = `已从剪贴板 (Ctrl+V) 导入 ${added} 张图片: ${imageFiles
         .map((f) => f.name)

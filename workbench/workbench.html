@@ -13,7 +13,7 @@
     <div class="brand">
       <img src="../icons/icon-48.png" alt="Logo" class="brand-logo" width="32" height="32">
       <div>
-        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.1</span></h1>
+        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.5</span></h1>
         <p class="subtitle">Google Flow 批量电商产品图增强工作台</p>
       </div>
     </div>
@@ -80,13 +80,21 @@
             <button id="btnPickInputDir" type="button" class="btn btn-secondary">选择原图文件夹</button>
             <button id="btnPickFiles" type="button" class="btn btn-secondary" hidden>添加单张/多张图片</button>
             <button id="btnPasteClipboard" type="button" class="btn btn-secondary" title="支持直接按 Ctrl+V 粘贴截图或复制的图片" hidden>粘贴剪贴板 (Ctrl+V)</button>
-            <button id="btnPickOutputDir" type="button" class="btn btn-secondary">设置输出目录 (推荐)</button>
+            <button id="btnPickOutputDir" type="button" class="btn btn-secondary" hidden>设置输出目录 (推荐)</button>
             <button id="btnClearCompleted" type="button" class="btn btn-secondary" hidden>移除已完成</button>
             <button id="btnClearAllTasks" type="button" class="btn btn-secondary">清空列表</button>
+            <label class="toolbar-checkbox-pill" title="勾选后直接在原路径替换原图（如 4.png → 写入 4.jpg 并删除 4.png）；取消勾选则保留原图并在同目录输出 4_enhanced_2K.jpg">
+              <input id="chkOverwriteOriginal" type="checkbox" checked>
+              <span>覆盖原图</span>
+            </label>
+            <label class="toolbar-checkbox-pill" title="勾选后仅扫描并处理文件名为纯数字的图片（如 1.png、2.jpg、10.webp）">
+              <input id="chkNumericNameOnly" type="checkbox" checked>
+              <span>只处理纯数字图片 (如 1.png)</span>
+            </label>
             <input id="fileInputFallback" type="file" accept=".jpg,.jpeg,.png,.webp" multiple hidden>
           </div>
           <div id="dirStatusText" class="helper-banner">
-            原图来源：未选择 | 输出目录：未绑定（默认自动下载至系统下载目录 Flow_Enhanced 子文件夹）
+            原图来源：未选择 | 输出方式：在原图文件夹内直接覆盖原图（如 4.png → 自动替换为 4.jpg 并删除 4.png）
           </div>
 
           <div id="imageTaskList" class="task-list" tabindex="0" aria-label="待增强商品原图列表（支持拖拽图片或按 Ctrl+V 粘贴剪贴板图片）">
@@ -319,6 +327,36 @@
       <div class="dialog-footer">
         <span id="copyFeedback" class="copy-feedback"></span>
         <button id="btnCopyDialogJson" type="button" class="btn btn-primary">复制到剪贴板</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 3. 队列完成恭喜统计提示框 (遵循 modern-web-guidance light-dismiss-a-dialog) -->
+  <dialog id="completionDialog" closedby="any" aria-labelledby="completionDialogTitle">
+    <div class="dialog-inner completion-dialog-inner">
+      <div class="dialog-header">
+        <h3 id="completionDialogTitle">🎉 批量队列处理完成！</h3>
+        <form method="dialog">
+          <button type="submit" class="btn btn-secondary">关闭 (Esc)</button>
+        </form>
+      </div>
+      <div class="completion-summary-body">
+        <p id="completionMainText" class="completion-main-line">恭喜成功处理 0 张图片，失败了 0 张</p>
+        <div class="completion-metrics-grid">
+          <div class="completion-metric-card">
+            <span class="completion-metric-label">总共耗时</span>
+            <strong id="completionTotalTime" class="completion-metric-value">0秒</strong>
+          </div>
+          <div class="completion-metric-card">
+            <span class="completion-metric-label">平均单个图片耗时</span>
+            <strong id="completionAvgTime" class="completion-metric-value">0秒</strong>
+          </div>
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <form method="dialog">
+          <button type="submit" class="btn btn-primary">太棒了，我知道了</button>
+        </form>
       </div>
     </div>
   </dialog>
