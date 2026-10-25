@@ -129,3 +129,7 @@ Antigravity-Flow-Image-Automator/
 │   └── workbench.js              # 队列状态机、IndexedDB 断点续传、File System Access 原位覆盖与同步预览交互
 └── icons/                        # 扩展图标资源 (16x16 / 48x48 / 128x128)
 ```
+
+### 界面
+- <img src="./images/PixPin_20261025_222341.png" alt="" width="1000">
+- <img src="./images/PixPin_20261025_222408.png" alt="" width="1000">
