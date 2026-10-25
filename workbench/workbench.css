@@ -368,7 +368,7 @@ body {
 }
 
 .task-list {
-  border: 1px solid var(--border-color);
+  border: 2px dashed var(--border-color);
   border-radius: 8px;
   min-height: 240px;
   max-height: 360px;
@@ -377,6 +377,47 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+  position: relative;
+}
+
+.task-list:focus-visible {
+  outline: none;
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+}
+
+.drop-zone-panel.is-dragover .task-list,
+.task-list.is-dragover {
+  border-color: var(--brand-primary);
+  background-color: rgba(59, 130, 246, 0.08);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.16);
+}
+
+.drop-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 6px;
+}
+
+.drop-empty-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-main);
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: 0 1px 0 var(--border-color);
 }
 
 .task-item {

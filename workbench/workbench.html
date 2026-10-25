@@ -102,10 +102,11 @@
 
       <div class="mvp-workspace-grid">
         <!-- 左侧：图片导入与任务队列列表 -->
-        <div class="mvp-panel">
+        <div id="imageDropZone" class="mvp-panel drop-zone-panel">
           <div class="panel-toolbar">
             <button id="btnPickInputDir" type="button" class="btn btn-secondary">选择原图文件夹</button>
             <button id="btnPickFiles" type="button" class="btn btn-secondary">添加单张/多张图片</button>
+            <button id="btnPasteClipboard" type="button" class="btn btn-secondary" title="支持直接按 Ctrl+V 粘贴截图或复制的图片">粘贴剪贴板 (Ctrl+V)</button>
             <button id="btnPickOutputDir" type="button" class="btn btn-secondary">设置输出目录 (推荐)</button>
             <button id="btnClearCompleted" type="button" class="btn btn-secondary">移除已完成</button>
             <button id="btnClearAllTasks" type="button" class="btn btn-secondary">清空列表</button>
@@ -115,8 +116,11 @@
             原图来源：未选择 | 输出目录：未绑定（默认自动下载至系统下载目录 Flow_Enhanced 子文件夹）
           </div>
 
-          <div id="imageTaskList" class="task-list">
-            <div class="empty-cell">请点击“选择原图文件夹”或“添加单张/多张图片”导入待增强商品原图（支持 JPG、JPEG、PNG、WebP）。</div>
+          <div id="imageTaskList" class="task-list" tabindex="0" aria-label="待增强商品原图列表（支持拖拽图片或按 Ctrl+V 粘贴剪贴板图片）">
+            <div class="empty-cell">
+              <div class="drop-empty-title">拖拽图片 / 文件夹到此处，或直接按 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴剪贴板图片</div>
+              <div class="drop-empty-sub">也可点击上方“选择原图文件夹”或“添加单张/多张图片”导入（支持 JPG、JPEG、PNG、WebP）</div>
+            </div>
           </div>
         </div>
 
@@ -138,8 +142,8 @@
             <div class="form-group">
               <label for="selectModel">图像生成模型 (Google Flow)</label>
               <select id="selectModel">
+                <option value="BELUGA" selected>🍌 Nano Banana 2.1 (BELUGA - 默认推荐)</option>
                 <option value="GEM_PIX_2">🍌 Nano Banana Pro (GEM_PIX_2 - 已实证)</option>
-                <option value="BELUGA">🍌 Nano Banana 2.1 (BELUGA - 已实证)</option>
                 <option value="HARBOR_SEAL">🍌 Nano Banana 2 Lite (HARBOR_SEAL)</option>
                 <option value="GEM_PIX">🍌 Nano Banana (GEM_PIX)</option>
               </select>

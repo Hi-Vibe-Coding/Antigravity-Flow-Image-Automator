@@ -66,8 +66,10 @@ const btnCancelQueue = document.getElementById('btnCancelQueue');
 const btnRetryFailed = document.getElementById('btnRetryFailed');
 const btnExportTaskLog = document.getElementById('btnExportTaskLog');
 
+const imageDropZone = document.getElementById('imageDropZone');
 const btnPickInputDir = document.getElementById('btnPickInputDir');
 const btnPickFiles = document.getElementById('btnPickFiles');
+const btnPasteClipboard = document.getElementById('btnPasteClipboard');
 const btnPickOutputDir = document.getElementById('btnPickOutputDir');
 const btnClearCompleted = document.getElementById('btnClearCompleted');
 const btnClearAllTasks = document.getElementById('btnClearAllTasks');
@@ -574,9 +576,92 @@ function buildOutputFileName(origName, resolution = '2K', mimeType = 'image/jpeg
   return `${base}_enhanced_${resolution}.${ext}`;
 }
 
+let clipboardSeqCounter = 1;
+
+function formatClipboardTimestamp() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(
+    now.getHours()
+  )}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+function createNamedClipboardFile(blobOrFile) {
+  const mime = inferMimeType(blobOrFile.name || '', blobOrFile.type || 'image/png');
+  const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png';
+  const rawName = String(blobOrFile.name || '').trim();
+  const isGenericClipboardName =
+    !rawName ||
+    /^image\.(png|jpe?g|webp)$/i.test(rawName) ||
+    /^clipboard/i.test(rawName);
+  const finalName = isGenericClipboardName
+    ? `clipboard_${formatClipboardTimestamp()}_${clipboardSeqCounter++}.${ext}`
+    : rawName;
+  return new File([blobOrFile], finalName, { type: mime });
+}
+
+async function extractFilesFromDataTransfer(dataTransfer) {
+  if (!dataTransfer) return [];
+  const collected = [];
+
+  // Support dragged directories via webkitGetAsEntry if available
+  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+  const entries = items
+    .filter((item) => item.kind === 'file' && typeof item.webkitGetAsEntry === 'function')
+    .map((item) => item.webkitGetAsEntry())
+    .filter(Boolean);
+
+  if (entries.length > 0) {
+    async function readEntry(entry) {
+      if (entry.isFile) {
+        const file = await new Promise((resolve) => entry.file(resolve, () => resolve(null)));
+        if (file && (isSupportedImageFile(file.name) || (file.type && file.type.startsWith('image/')))) {
+          collected.push(file);
+        }
+      } else if (entry.isDirectory) {
+        const reader = entry.createReader();
+        const readBatch = async () => {
+          const batch = await new Promise((resolve) =>
+            reader.readEntries(resolve, () => resolve([]))
+          );
+          if (batch.length > 0) {
+            for (const sub of batch) {
+              await readEntry(sub);
+            }
+            await readBatch();
+          }
+        };
+        await readBatch();
+      }
+    }
+
+    for (const entry of entries) {
+      await readEntry(entry);
+    }
+    if (collected.length > 0) {
+      return collected.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    }
+  }
+
+  // Fallback to standard dataTransfer.files
+  if (dataTransfer.files && dataTransfer.files.length > 0) {
+    for (const f of Array.from(dataTransfer.files)) {
+      if (isSupportedImageFile(f.name) || (f.type && f.type.startsWith('image/'))) {
+        collected.push(f);
+      }
+    }
+  }
+  return collected.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+}
+
 async function addFilesToTaskList(fileList) {
-  for (const file of fileList) {
-    if (!isSupportedImageFile(file.name)) continue;
+  let addedCount = 0;
+  for (const rawFile of fileList) {
+    const hasValidExt = isSupportedImageFile(rawFile.name || '');
+    const isImageMime = Boolean(rawFile.type && rawFile.type.startsWith('image/'));
+    if (!hasValidExt && !isImageMime) continue;
+
+    const file = hasValidExt ? rawFile : createNamedClipboardFile(rawFile);
     const exists = appState.tasks.some((t) => t.name === file.name && t.size === file.size);
     if (exists) continue;
 
@@ -609,9 +694,11 @@ async function addFilesToTaskList(fileList) {
 
     appState.tasks.push(newTask);
     await saveTaskToDb(newTask, appState.tasks.length - 1);
+    addedCount++;
   }
   renderTaskList();
   updateDirStatusBanner();
+  return addedCount;
 }
 
 function updateDirStatusBanner() {
@@ -681,8 +768,18 @@ function renderTaskList() {
   if (appState.tasks.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty-cell';
-    empty.textContent =
-      '请点击“选择原图文件夹”或“添加单张/多张图片”导入待增强商品原图（支持 JPG、JPEG、PNG、WebP）。';
+
+    const title = document.createElement('div');
+    title.className = 'drop-empty-title';
+    title.innerHTML =
+      '拖拽图片 / 文件夹到此处，或直接按 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴剪贴板图片';
+
+    const sub = document.createElement('div');
+    sub.className = 'drop-empty-sub';
+    sub.textContent =
+      '也可点击上方“选择原图文件夹”或“添加单张/多张图片”导入（支持 JPG、JPEG、PNG、WebP）';
+
+    empty.append(title, sub);
     imageTaskList.appendChild(empty);
     return;
   }
@@ -1342,6 +1439,7 @@ async function initWorkbench() {
   const {
     userPrompt,
     selectedModel,
+    defaultModelV025Migrated,
     selectedResolution,
     selectedAspect,
     selectedDelay,
@@ -1349,6 +1447,7 @@ async function initWorkbench() {
   } = await chrome.storage.local.get([
     'userPrompt',
     'selectedModel',
+    'defaultModelV025Migrated',
     'selectedResolution',
     'selectedAspect',
     'selectedDelay',
@@ -1356,12 +1455,27 @@ async function initWorkbench() {
   ]);
 
   promptTextarea.value = userPrompt || DEFAULT_ECOMMERCE_PROMPT;
-  if (selectedModel) {
+
+  // Default to Nano Banana 2.1 (BELUGA); migrate once for v0.2.5 so BELUGA is active immediately
+  if (!defaultModelV025Migrated) {
+    selectModel.value = 'BELUGA';
+    await chrome.storage.local.set({
+      selectedModel: 'BELUGA',
+      defaultModelV025Migrated: true
+    });
+  } else if (selectedModel) {
     selectModel.value =
       selectedModel === 'NANO_BANANA_2_AUTO' || selectedModel === 'NARWHAL'
         ? 'BELUGA'
         : selectedModel;
+  } else {
+    selectModel.value = 'BELUGA';
   }
+
+  selectModel.addEventListener('change', () => {
+    chrome.storage.local.set({ selectedModel: selectModel.value });
+  });
+
   if (selectedResolution) selectResolution.value = selectedResolution;
   if (selectedAspect) selectAspect.value = selectedAspect;
   if (selectedDelay) selectDelay.value = selectedDelay;
@@ -1552,6 +1666,133 @@ async function initWorkbench() {
       fileInputFallback.value = '';
     }
   });
+
+  // Drag & Drop support on the image receiving panel
+  let dragEnterDepth = 0;
+  const setDragHighlight = (active) => {
+    if (imageDropZone) imageDropZone.classList.toggle('is-dragover', active);
+    if (imageTaskList) imageTaskList.classList.toggle('is-dragover', active);
+  };
+
+  window.addEventListener('dragover', (e) => {
+    e.preventDefault();
+  });
+
+  window.addEventListener('drop', (e) => {
+    if (!imageDropZone || !imageDropZone.contains(e.target)) {
+      e.preventDefault();
+    }
+  });
+
+  if (imageDropZone) {
+    imageDropZone.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dragEnterDepth++;
+      setDragHighlight(true);
+    });
+
+    imageDropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+      setDragHighlight(true);
+    });
+
+    imageDropZone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragEnterDepth = Math.max(0, dragEnterDepth - 1);
+      if (dragEnterDepth === 0) {
+        setDragHighlight(false);
+      }
+    });
+
+    imageDropZone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragEnterDepth = 0;
+      setDragHighlight(false);
+
+      const droppedFiles = await extractFilesFromDataTransfer(e.dataTransfer);
+      if (droppedFiles.length > 0) {
+        const added = await addFilesToTaskList(droppedFiles);
+        queueLiveStepText.textContent = `已通过拖拽导入 ${added} 张图片（共识别 ${droppedFiles.length} 张图片文件）。`;
+      } else {
+        queueLiveStepText.textContent = '拖拽内容中未检测到支持的图片文件（支持 JPG、JPEG、PNG、WebP）。';
+      }
+    });
+  }
+
+  // Clipboard Paste (Ctrl+V) support anywhere on the Workbench
+  window.addEventListener('paste', async (e) => {
+    const cb = e.clipboardData;
+    if (!cb) return;
+
+    const imageFiles = [];
+    if (cb.items && cb.items.length > 0) {
+      for (const item of Array.from(cb.items)) {
+        if (item.kind === 'file' && item.type && item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          if (blob) {
+            imageFiles.push(createNamedClipboardFile(blob));
+          }
+        }
+      }
+    }
+
+    if (imageFiles.length === 0 && cb.files && cb.files.length > 0) {
+      for (const f of Array.from(cb.files)) {
+        if (isSupportedImageFile(f.name || '') || (f.type && f.type.startsWith('image/'))) {
+          imageFiles.push(createNamedClipboardFile(f));
+        }
+      }
+    }
+
+    // If clipboard only contains text (e.g. user is pasting prompt into textarea), let normal paste proceed
+    if (imageFiles.length === 0) return;
+
+    e.preventDefault();
+    const added = await addFilesToTaskList(imageFiles);
+    if (added > 0) {
+      queueLiveStepText.textContent = `已从剪贴板 (Ctrl+V) 导入 ${added} 张图片: ${imageFiles
+        .map((f) => f.name)
+        .join(', ')}`;
+    }
+  });
+
+  // Toolbar "粘贴剪贴板 (Ctrl+V)" button via Async Clipboard API
+  if (btnPasteClipboard) {
+    btnPasteClipboard.addEventListener('click', async () => {
+      if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
+        alert('请直接按键盘 Ctrl+V 粘贴剪贴板中的图片。');
+        return;
+      }
+      try {
+        const clipboardItems = await navigator.clipboard.read();
+        const filesToAdd = [];
+        for (const item of clipboardItems) {
+          const imageType = item.types.find((t) => t.startsWith('image/'));
+          if (imageType) {
+            const blob = await item.getType(imageType);
+            if (blob) {
+              filesToAdd.push(createNamedClipboardFile(blob));
+            }
+          }
+        }
+        if (filesToAdd.length > 0) {
+          const added = await addFilesToTaskList(filesToAdd);
+          queueLiveStepText.textContent = `已从剪贴板导入 ${added} 张图片: ${filesToAdd
+            .map((f) => f.name)
+            .join(', ')}`;
+        } else {
+          alert('当前剪贴板中没有检测到图片（请先复制图片或截图，再按 Ctrl+V 或点击此按钮）。');
+        }
+      } catch (err) {
+        console.warn('Clipboard read error:', err);
+        alert('请直接按键盘 Ctrl+V 粘贴剪贴板中的图片。');
+      }
+    });
+  }
 
   btnPickOutputDir.addEventListener('click', async () => {
     if (typeof window.showDirectoryPicker !== 'function') {

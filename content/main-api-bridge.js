@@ -9,7 +9,7 @@
 //    with `CAPTCHA_IMAGE = "IMAGE_GENERATION"`.
 
 (function () {
-  const BRIDGE_VERSION = '0.2.4';
+  const BRIDGE_VERSION = '0.2.5';
   const BRIDGE_SOURCE_MAIN = 'ANTIGRAVITY_FLOW_MAIN_BRIDGE';
   const BRIDGE_SOURCE_ISOLATED = 'ANTIGRAVITY_FLOW_ISOLATED_RELAY';
   const DEFAULT_FLOW_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
@@ -1489,11 +1489,12 @@
   async function resolveCandidateWireModels(requestedModel, projectId) {
     delete bridgeState.verifiedNanoBanana2Key;
 
-    if (!requestedModel || requestedModel === 'GEM_PIX_2' || requestedModel === 'NANO_BANANA_PRO') {
+    if (requestedModel === 'GEM_PIX_2' || requestedModel === 'NANO_BANANA_PRO') {
       return ['GEM_PIX_2'];
     }
 
     if (
+      !requestedModel ||
       requestedModel === 'BELUGA' ||
       requestedModel === 'beluga_display' ||
       requestedModel === 'NANO_BANANA_2_1' ||
