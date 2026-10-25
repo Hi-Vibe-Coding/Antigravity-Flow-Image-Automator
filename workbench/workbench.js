@@ -446,7 +446,7 @@ function renderProtocolSummary() {
 
   const modelsSet = new Set([
     'GEM_PIX_2 (Nano Banana Pro)',
-    'NARWHAL (Nano Banana 2.1)',
+    'BELUGA (Nano Banana 2.1)',
     'HARBOR_SEAL (Nano Banana Lite)',
     ...(s.observedModels || [])
   ]);
@@ -1357,7 +1357,10 @@ async function initWorkbench() {
 
   promptTextarea.value = userPrompt || DEFAULT_ECOMMERCE_PROMPT;
   if (selectedModel) {
-    selectModel.value = selectedModel === 'NANO_BANANA_2_AUTO' ? 'NARWHAL' : selectedModel;
+    selectModel.value =
+      selectedModel === 'NANO_BANANA_2_AUTO' || selectedModel === 'NARWHAL'
+        ? 'BELUGA'
+        : selectedModel;
   }
   if (selectedResolution) selectResolution.value = selectedResolution;
   if (selectedAspect) selectAspect.value = selectedAspect;

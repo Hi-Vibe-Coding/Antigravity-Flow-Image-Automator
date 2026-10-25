@@ -9,7 +9,7 @@
 //    with `CAPTCHA_IMAGE = "IMAGE_GENERATION"`.
 
 (function () {
-  const BRIDGE_VERSION = '0.2.2';
+  const BRIDGE_VERSION = '0.2.4';
   const BRIDGE_SOURCE_MAIN = 'ANTIGRAVITY_FLOW_MAIN_BRIDGE';
   const BRIDGE_SOURCE_ISOLATED = 'ANTIGRAVITY_FLOW_ISOLATED_RELAY';
   const DEFAULT_FLOW_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
@@ -707,53 +707,116 @@
 
   function parseHTrJvModelCatalog(parsedResult) {
     try {
-      const root = Array.isArray(parsedResult?.[0]) ? parsedResult[0] : parsedResult;
-      if (!Array.isArray(root)) return;
+      if (!parsedResult || typeof parsedResult !== 'object') return;
 
       const displayMap = new Map();
       const foundModels = [];
+      const belugaKeys = new Set();
+      const gemPix2Siblings = new Set();
 
-      for (const section of root) {
-        if (!Array.isArray(section)) continue;
-        for (const entry of section) {
-          if (
-            Array.isArray(entry) &&
-            typeof entry[0] === 'string' &&
-            Array.isArray(entry[1]) &&
-            typeof entry[1][0] === 'string'
-          ) {
-            displayMap.set(entry[0], entry[1][0]);
+      const FORBIDDEN_LITE_OR_OTHER = new Set([
+        'HARBOR_SEAL',
+        'GEM_PIX',
+        'GEM_PIX_2',
+        'NARWHAL',
+        'IMAGEN_3',
+        'IMAGEN_3_1',
+        'IMAGEN_3_5'
+      ]);
+
+      function isLikelyImageWireKey(str) {
+        if (typeof str !== 'string' || str.length < 3 || str.length > 40) return false;
+        if (str.startsWith('veo_') || str.startsWith('abra_')) return false;
+        if (str.endsWith('_display') || str.includes(' ') || str.includes('/')) return false;
+        return /^[A-Z][A-Z0-9_]*$/.test(str);
+      }
+
+      // Pass 1: Recursive walk over the entire HTrJv parsedResult tree
+      function walkTree(node, parentChain = []) {
+        if (!Array.isArray(node)) return;
+
+        // Collect display label mappings: [key, [label, ...]]
+        if (
+          typeof node[0] === 'string' &&
+          Array.isArray(node[1]) &&
+          typeof node[1][0] === 'string' &&
+          node[1][0].length > 0 &&
+          !Array.isArray(node[1][0])
+        ) {
+          displayMap.set(node[0], node[1][0]);
+        }
+
+        // Check if this node is a group mapping: ["beluga_display", [ [variantKey, ...], ... ]]
+        if (node[0] === 'beluga_display' && Array.isArray(node[1])) {
+          const collectStrings = (sub) => {
+            if (typeof sub === 'string' && isLikelyImageWireKey(sub)) {
+              belugaKeys.add(sub);
+            } else if (Array.isArray(sub)) {
+              for (const item of sub) collectStrings(item);
+            }
+          };
+          collectStrings(node[1]);
+        }
+
+        // Check if this array is a table of model entries where one entry has "GEM_PIX_2"
+        const hasGemPix2Child = node.some(
+          (child) =>
+            child === 'GEM_PIX_2' ||
+            (Array.isArray(child) && (child[0] === 'GEM_PIX_2' || child[1] === 'GEM_PIX_2'))
+        );
+        if (hasGemPix2Child) {
+          for (const sibling of node) {
+            const candidate =
+              typeof sibling === 'string'
+                ? sibling
+                : Array.isArray(sibling) && typeof sibling[0] === 'string'
+                ? sibling[0]
+                : null;
+            if (candidate && isLikelyImageWireKey(candidate) && !FORBIDDEN_LITE_OR_OTHER.has(candidate)) {
+              gemPix2Siblings.add(candidate);
+            }
+          }
+        }
+
+        for (const child of node) {
+          if (Array.isArray(child)) {
+            walkTree(child, parentChain.concat([node]));
           }
         }
       }
 
-      for (const section of root) {
-        if (!Array.isArray(section)) continue;
-        for (const group of section) {
-          if (
-            Array.isArray(group) &&
-            typeof group[0] === 'string' &&
-            Array.isArray(group[1]) &&
-            group[1].length > 0 &&
-            Array.isArray(group[1][0]) &&
-            typeof group[1][0][0] === 'string'
-          ) {
-            const groupName = displayMap.get(group[0]) || group[0];
-            for (const variant of group[1]) {
-              if (Array.isArray(variant) && typeof variant[0] === 'string') {
-                const variantKey = variant[0];
-                const variantLabel = displayMap.get(variantKey) || groupName;
-                const combinedStr = `${groupName} ${variantLabel} ${variantKey}`.toLowerCase();
-                if (
-                  combinedStr.includes('banana') ||
-                  combinedStr.includes('gem_pix') ||
-                  combinedStr.includes('narwhal') ||
-                  combinedStr.includes('harbor_seal') ||
-                  combinedStr.includes('imagen') ||
-                  combinedStr.includes('image')
-                ) {
+      walkTree(parsedResult);
+
+      if (belugaKeys.size > 0) {
+        bridgeState.belugaDiscoveredKeys = Array.from(belugaKeys);
+      }
+      if (gemPix2Siblings.size > 0) {
+        bridgeState.gemPix2SiblingKeys = Array.from(gemPix2Siblings);
+      }
+
+      const root = Array.isArray(parsedResult?.[0]) ? parsedResult[0] : parsedResult;
+      if (Array.isArray(root)) {
+        for (const section of root) {
+          if (!Array.isArray(section)) continue;
+          for (const group of section) {
+            if (
+              Array.isArray(group) &&
+              typeof group[0] === 'string' &&
+              Array.isArray(group[1]) &&
+              group[1].length > 0 &&
+              Array.isArray(group[1][0]) &&
+              typeof group[1][0][0] === 'string'
+            ) {
+              const groupKey = group[0];
+              const groupName = displayMap.get(groupKey) || groupKey;
+              for (const variant of group[1]) {
+                if (Array.isArray(variant) && typeof variant[0] === 'string') {
+                  const variantKey = variant[0];
+                  if (variantKey.startsWith('veo_') || variantKey.startsWith('abra_')) continue;
+                  const variantLabel = displayMap.get(variantKey) || groupName;
                   foundModels.push({
                     modelKey: variantKey,
+                    groupKey,
                     groupName,
                     displayName: `${variantLabel} (${variantKey})`
                   });
@@ -764,13 +827,110 @@
         }
       }
 
-      if (foundModels.length > 0) {
-        bridgeState.discoveredImageModels = foundModels;
-        bridgeState.catalogFetched = true;
+      bridgeState.discoveredImageModels = foundModels;
+      bridgeState.catalogFetched = true;
+    } catch {
+      // Ignore
+    }
+  }
+
+  /**
+   * Scan Flow's loaded frontend JS bundles for the exact Protobuf enum key mapped to 36
+   * (where GEM_PIX_2 = 25 and Nano Banana 2.1 = 36, or adjacent to "beluga_display").
+   */
+  async function scanFrontendBundleForNanoBanana21() {
+    if (bridgeState.bundleScannedForBeluga) {
+      return bridgeState.enum36ModelKeys || [];
+    }
+    bridgeState.bundleScannedForBeluga = true;
+    const discovered = new Set();
+    const FORBIDDEN = new Set([
+      'HARBOR_SEAL',
+      'GEM_PIX',
+      'GEM_PIX_2',
+      'NARWHAL',
+      'IMAGE_GENERATION',
+      'VIDEO_GENERATION',
+      'TRUE',
+      'FALSE',
+      'NULL'
+    ]);
+
+    function inspectJsText(jsText) {
+      if (!jsText || typeof jsText !== 'string') return;
+
+      // 1. Search around "GEM_PIX_2" for enum value 36 (since GEM_PIX_2 is 25 and Nano Banana 2.1 is 36)
+      let idx = jsText.indexOf('GEM_PIX_2');
+      while (idx !== -1) {
+        const snippet = jsText.slice(Math.max(0, idx - 1800), Math.min(jsText.length, idx + 1800));
+        // Match KEY:36 or KEY: 36 or 36:"KEY" or [36,"KEY"]
+        const regexes = [
+          /\b([A-Z][A-Z0-9_]{2,30})\s*:\s*36\b/g,
+          /\b36\s*:\s*["']([A-Z][A-Z0-9_]{2,30})["']/g,
+          /["']([A-Z][A-Z0-9_]{2,30})["']\s*,\s*36\b/g,
+          /\b36\s*,\s*["']([A-Z][A-Z0-9_]{2,30})["']/g
+        ];
+        for (const rx of regexes) {
+          let m;
+          while ((m = rx.exec(snippet)) !== null) {
+            const key = m[1];
+            if (key && !FORBIDDEN.has(key) && !key.startsWith('VEO_') && !key.startsWith('ABRA_')) {
+              discovered.add(key);
+            }
+          }
+        }
+        idx = jsText.indexOf('GEM_PIX_2', idx + 9);
+      }
+
+      // 2. Search around "beluga_display" for uppercase wire keys
+      let bIdx = jsText.indexOf('beluga_display');
+      while (bIdx !== -1) {
+        const snippet = jsText.slice(Math.max(0, bIdx - 800), Math.min(jsText.length, bIdx + 800));
+        const rx = /["']([A-Z][A-Z0-9_]{3,28})["']/g;
+        let m;
+        while ((m = rx.exec(snippet)) !== null) {
+          const key = m[1];
+          if (key && !FORBIDDEN.has(key) && !key.startsWith('VEO_') && !key.startsWith('ABRA_')) {
+            discovered.add(key);
+          }
+        }
+        bIdx = jsText.indexOf('beluga_display', bIdx + 14);
+      }
+    }
+
+    try {
+      const scripts = Array.from(document.querySelectorAll('script'));
+      for (const s of scripts) {
+        if (s.textContent && (s.textContent.includes('GEM_PIX_2') || s.textContent.includes('beluga_display'))) {
+          inspectJsText(s.textContent);
+        }
+      }
+
+      if (discovered.size === 0) {
+        const externalUrls = scripts
+          .map((s) => s.src)
+          .filter((src) => src && (src.includes('flow.google.com') || src.includes('gstatic.com')));
+        for (const srcUrl of externalUrls.slice(0, 12)) {
+          try {
+            const resp = await originalFetch(srcUrl, { credentials: 'omit', cache: 'force-cache' });
+            if (resp.ok) {
+              const txt = await resp.text();
+              if (txt.includes('GEM_PIX_2') || txt.includes('beluga_display')) {
+                inspectJsText(txt);
+                if (discovered.size > 0) break;
+              }
+            }
+          } catch {
+            // Ignore CORS or network error on individual script tag
+          }
+        }
       }
     } catch {
       // Ignore
     }
+
+    bridgeState.enum36ModelKeys = Array.from(discovered);
+    return bridgeState.enum36ModelKeys;
   }
 
   function classifyEndpoint(urlStr, parsedReq, parsedResp) {
@@ -1320,23 +1480,99 @@
   }
 
   /**
-   * Resolve wire model ID:
-   * - GEM_PIX_2: Nano Banana Pro
-   * - NARWHAL: Nano Banana 2 / 2.1
-   * - HARBOR_SEAL: Nano Banana Lite
-   * - GEM_PIX: Nano Banana
+   * Strictly resolve exact wire model ID for ogiZ0b without EVER downgrading to Lite (HARBOR_SEAL / GEM_PIX):
+   * - GEM_PIX_2   -> 🍌 Nano Banana Pro (enum=25)
+   * - BELUGA / enum=36 -> 🍌 Nano Banana 2.1 (beluga_display, enum=36)
+   * - HARBOR_SEAL -> 🍌 Nano Banana 2 Lite
+   * - GEM_PIX     -> 🍌 Nano Banana
    */
-  function resolveWireImageModel(requestedModel) {
+  async function resolveCandidateWireModels(requestedModel, projectId) {
+    delete bridgeState.verifiedNanoBanana2Key;
+
     if (!requestedModel || requestedModel === 'GEM_PIX_2' || requestedModel === 'NANO_BANANA_PRO') {
-      return 'GEM_PIX_2';
+      return ['GEM_PIX_2'];
     }
-    if (requestedModel === 'NANO_BANANA_2_AUTO' || requestedModel === 'NANO_BANANA_2' || requestedModel === 'NARWHAL') {
-      return 'NARWHAL';
+
+    if (
+      requestedModel === 'BELUGA' ||
+      requestedModel === 'beluga_display' ||
+      requestedModel === 'NANO_BANANA_2_1' ||
+      requestedModel === 'NANO_BANANA_2_AUTO' ||
+      requestedModel === 'NARWHAL'
+    ) {
+      if (
+        bridgeState.verifiedNanoBanana21Key &&
+        bridgeState.verifiedNanoBanana21Key !== 'HARBOR_SEAL' &&
+        bridgeState.verifiedNanoBanana21Key !== 'GEM_PIX'
+      ) {
+        return [bridgeState.verifiedNanoBanana21Key];
+      }
+
+      // 1. Ensure HTrJv full model catalog has been parsed with deep tree scan
+      if (!bridgeState.belugaDiscoveredKeys && projectId) {
+        try {
+          const catalogResult = await executeBatchRpc('HTrJv', [], projectId);
+          parseHTrJvModelCatalog(catalogResult);
+        } catch {
+          // Ignore HTrJv probe failure
+        }
+      }
+
+      // 2. Scan frontend JS bundle for Protobuf enum=36 / beluga_display wire key
+      const enum36Keys = await scanFrontendBundleForNanoBanana21();
+
+      // Strictly block any Lite or Pro or retired model from entering Nano Banana 2.1 candidates
+      const STRICT_BLOCKLIST = new Set([
+        'HARBOR_SEAL',
+        'GEM_PIX',
+        'GEM_PIX_2',
+        'NARWHAL',
+        'IMAGEN_3',
+        'IMAGEN_3_1',
+        'IMAGEN_3_5'
+      ]);
+
+      const candidates = [];
+      const addStrictCandidate = (key) => {
+        if (
+          typeof key === 'string' &&
+          key.length >= 3 &&
+          !STRICT_BLOCKLIST.has(key) &&
+          !candidates.includes(key)
+        ) {
+          candidates.push(key);
+        }
+      };
+
+      // Priority 1: Exact enum=36 or beluga_display keys from frontend bundle
+      if (Array.isArray(enum36Keys)) {
+        for (const k of enum36Keys) addStrictCandidate(k);
+      }
+
+      // Priority 2: Keys extracted from ["beluga_display", ...] subtree in HTrJv
+      if (Array.isArray(bridgeState.belugaDiscoveredKeys)) {
+        for (const k of bridgeState.belugaDiscoveredKeys) addStrictCandidate(k);
+      }
+
+      // Priority 3: Standard BELUGA key
+      addStrictCandidate('BELUGA');
+
+      // Priority 4: Sibling keys in the exact same HTrJv table as GEM_PIX_2
+      if (Array.isArray(bridgeState.gemPix2SiblingKeys)) {
+        for (const k of bridgeState.gemPix2SiblingKeys) addStrictCandidate(k);
+      }
+
+      // Priority 5: Known naming variants for Nano Banana 2.1
+      addStrictCandidate('BELUGA_2');
+      addStrictCandidate('GEM_PIX_2_1');
+
+      return candidates.length > 0 ? candidates : ['BELUGA'];
     }
+
     if (requestedModel === 'NANO_BANANA_LITE' || requestedModel === 'HARBOR_SEAL') {
-      return 'HARBOR_SEAL';
+      return ['HARBOR_SEAL'];
     }
-    return requestedModel;
+    return [requestedModel];
   }
 
   /**
@@ -1360,59 +1596,91 @@
     }
 
     const aspectRatioEnum = Number(payload.aspectRatioEnum) || 1;
-    const wireModelKey = resolveWireImageModel(payload.modelName);
-
-    const clientContext = await buildClientContext(projectId);
+    const candidateModels = await resolveCandidateWireModels(payload.modelName, projectId);
     const seed =
       typeof payload.seed === 'number' && payload.seed > 0
         ? payload.seed
         : Math.floor(Math.random() * 1000000000) + 1;
-    const reqUuid1 = generateUpperUuid();
-    const reqUuid2 = generateUpperUuid();
-    const batchUuid = generateUpperUuid();
 
-    const ogiZ0bArgs = [
-      null,
-      [
+    let parsedResult = null;
+    let activeWireModelKey = candidateModels[0];
+    let lastRpcErr = null;
+
+    for (let idx = 0; idx < candidateModels.length; idx++) {
+      const candidateKey = candidateModels[idx];
+      activeWireModelKey = candidateKey;
+
+      const clientContext = await buildClientContext(projectId);
+      const reqUuid1 = generateUpperUuid();
+      const reqUuid2 = generateUpperUuid();
+      const batchUuid = generateUpperUuid();
+
+      const ogiZ0bArgs = [
+        null,
         [
-          null,
-          null,
           [
-            [
-              uploadedMediaId,
-              null,
-              null,
-              null,
-              1
-            ]
-          ],
-          seed,
-          aspectRatioEnum,
-          wireModelKey,
-          null,
-          clientContext,
-          [
+            null,
+            null,
             [
               [
-                promptText
+                uploadedMediaId,
+                null,
+                null,
+                null,
+                1
               ]
-            ]
-          ],
-          null,
-          null,
-          null,
-          reqUuid1,
-          reqUuid2
+            ],
+            seed,
+            aspectRatioEnum,
+            candidateKey,
+            null,
+            clientContext,
+            [
+              [
+                [
+                  promptText
+                ]
+              ]
+            ],
+            null,
+            null,
+            null,
+            reqUuid1,
+            reqUuid2
+          ]
+        ],
+        1,
+        clientContext,
+        [
+          batchUuid
         ]
-      ],
-      1,
-      clientContext,
-      [
-        batchUuid
-      ]
-    ];
+      ];
 
-    const parsedResult = await executeBatchRpc('ogiZ0b', ogiZ0bArgs, projectId);
+      try {
+        parsedResult = await executeBatchRpc('ogiZ0b', ogiZ0bArgs, projectId);
+        if (
+          payload.modelName === 'BELUGA' ||
+          payload.modelName === 'NANO_BANANA_2_1' ||
+          payload.modelName === 'NANO_BANANA_2_AUTO'
+        ) {
+          bridgeState.verifiedNanoBanana21Key = candidateKey;
+        }
+        lastRpcErr = null;
+        break;
+      } catch (err) {
+        lastRpcErr = err;
+        // If error is [5] (NOT_FOUND on model identifier) and there are fallback candidates, try next candidate
+        if (err.rpcErrorCode === 5 && idx < candidateModels.length - 1) {
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (lastRpcErr && !parsedResult) {
+      throw lastRpcErr;
+    }
+
     const firstGenItem = parsedResult?.[0]?.[0];
     const generatedMediaId = firstGenItem?.[0];
     const workflowId = firstGenItem?.[2] || parsedResult?.[1]?.[0]?.[0] || null;
@@ -1421,10 +1689,11 @@
       firstGenItem?.[6]?.[5]?.[1] ||
       null;
     const dimensions = firstGenItem?.[6]?.[2] || [1024, 1024];
+    const returnedModelEnum = firstGenItem?.[6]?.[0]?.[8] ?? null;
 
     if (!generatedMediaId || typeof generatedMediaId !== 'string') {
       throw new Error(
-        `图生图 (ogiZ0b, model=${wireModelKey}) 未返回有效的生成图像 ID: ${JSON.stringify(parsedResult).slice(
+        `图生图 (ogiZ0b, model=${activeWireModelKey}) 未返回有效的生成图像 ID: ${JSON.stringify(parsedResult).slice(
           0,
           200
         )}`
@@ -1438,7 +1707,7 @@
       signedUrl1K,
       dimensions,
       seedUsed: seed,
-      modelUsed: wireModelKey
+      modelUsed: returnedModelEnum ? `${activeWireModelKey} (enum=${returnedModelEnum})` : activeWireModelKey
     };
   }
 
