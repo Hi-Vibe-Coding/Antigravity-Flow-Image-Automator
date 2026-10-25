@@ -13,52 +13,25 @@
     <div class="brand">
       <img src="../icons/icon-48.png" alt="Logo" class="brand-logo" width="32" height="32">
       <div>
-        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.2.0</span></h1>
-        <p class="subtitle">Google Flow 非 DOM 批量电商产品图生图工作台（maseQ + ogiZ0b + SPrCad 实证引擎）</p>
+        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.2.7</span></h1>
+        <p class="subtitle">Google Flow 批量电商产品图增强工作台</p>
       </div>
     </div>
     <div class="topbar-actions">
       <span id="connectionBadge" class="status-pill status-warn">正在检测 Google Flow...</span>
-      <button id="btnSyncCatalog" type="button" class="btn btn-secondary" title="主动调用 HTrJv 同步当前账号可用模型">同步模型目录</button>
       <button id="btnRefreshConnection" type="button" class="btn btn-secondary">刷新连接状态</button>
       <button id="btnOpenFlowTab" type="button" class="btn btn-primary">打开 Google Flow 页面</button>
     </div>
   </header>
 
   <main class="container">
-    <!-- 1. 会话与环境诊断栏 -->
-    <section class="card" aria-labelledby="sectionAuthTitle">
-      <div class="card-header">
-        <h2 id="sectionAuthTitle">一、Google Flow 会话与安全上下文状态</h2>
-        <span class="tag tag-ok">非 DOM 桥接模式 (MAIN World batchexecute RPC)</span>
-      </div>
-      <div class="diagnostic-grid">
-        <div class="diag-item">
-          <span class="diag-label">Flow 标签页状态</span>
-          <strong id="diagTabStatus" class="diag-value">未连接</strong>
-        </div>
-        <div class="diag-item">
-          <span class="diag-label">WIZ 会话签名 (at / SNlM0e &amp; f.sid)</span>
-          <strong id="diagTokenStatus" class="diag-value">待检测</strong>
-        </div>
-        <div class="diag-item">
-          <span class="diag-label">当前项目 ID (projectId)</span>
-          <strong id="diagProjectId" class="diag-value">待捕获（请进入 /project/... 页面）</strong>
-        </div>
-        <div class="diag-item">
-          <span class="diag-label">reCAPTCHA Enterprise 状态</span>
-          <strong id="diagRecaptcha" class="diag-value">待检测</strong>
-        </div>
-      </div>
-    </section>
-
-    <!-- 2. 批量商品图导入、参数配置与自动化图生图队列 -->
+    <!-- 1. 主工作台：批量商品图导入、参数配置与自动化图生图队列 -->
     <section class="card highlight-card" aria-labelledby="sectionMvpTitle">
       <div class="card-header">
         <div>
-          <h2 id="sectionMvpTitle">二、批量商品图导入与自动化图生图队列（严格参考图绑定）</h2>
+          <h2 id="sectionMvpTitle">批量商品图导入与自动化图生图队列</h2>
           <p class="card-desc">
-            每张原图独立执行：<strong>① 上传原图 (maseQ) → ② 绑定参考图生图 (ogiZ0b) → ③ 2K 超分放大 (SPrCad) / 1K 直出 → ④ 完整性校验并落盘保存</strong>。支持断点恢复，已完成任务不会重复提交。
+            每张原图独立执行：<strong>① 上传参考原图 → ② AI 图生图增强 → ③ 2K / 4K 超分放大 → ④ 自动落盘保存</strong>。支持断点恢复，已完成任务不会重复提交。
           </p>
         </div>
         <span id="queueStateBadge" class="status-pill status-ok">队列空闲就绪</span>
@@ -78,25 +51,25 @@
             <div id="queueProgressFill" class="progress-bar-fill" style="width: 0%"></div>
           </div>
           <div id="queueLiveStepText" class="queue-live-text">
-            等待开始：建议先导入本地图片，点击“样本测试”验证前 1~3 张效果后再启动全部队列。
+            等待开始：请先导入图片，点击“开始全部队列”即可批量执行图生图。
           </div>
         </div>
 
         <div class="queue-buttons">
-          <div class="sample-run-group">
-            <select id="selectSampleCount" aria-label="样本测试张数" class="select-compact">
+          <div class="sample-run-group" hidden>
+            <select id="selectSampleCount" aria-label="样本测试张数" class="select-compact" hidden>
               <option value="1">测试 1 张</option>
               <option value="2">测试 2 张</option>
               <option value="3">测试 3 张</option>
             </select>
-            <button id="btnRunSample" type="button" class="btn btn-secondary">样本测试</button>
+            <button id="btnRunSample" type="button" class="btn btn-secondary" hidden>样本测试</button>
           </div>
           <button id="btnStartQueue" type="button" class="btn btn-primary">开始全部队列</button>
           <button id="btnPauseQueue" type="button" class="btn btn-secondary" disabled>暂停</button>
           <button id="btnResumeQueue" type="button" class="btn btn-primary" hidden>继续队列</button>
           <button id="btnCancelQueue" type="button" class="btn btn-danger" disabled>取消</button>
-          <button id="btnRetryFailed" type="button" class="btn btn-secondary">重试失败项</button>
-          <button id="btnExportTaskLog" type="button" class="btn btn-secondary">导出任务记录</button>
+          <button id="btnRetryFailed" type="button" class="btn btn-secondary" hidden>重试失败项</button>
+          <button id="btnExportTaskLog" type="button" class="btn btn-secondary" hidden>导出任务记录</button>
         </div>
       </div>
 
@@ -105,10 +78,10 @@
         <div id="imageDropZone" class="mvp-panel drop-zone-panel">
           <div class="panel-toolbar">
             <button id="btnPickInputDir" type="button" class="btn btn-secondary">选择原图文件夹</button>
-            <button id="btnPickFiles" type="button" class="btn btn-secondary">添加单张/多张图片</button>
-            <button id="btnPasteClipboard" type="button" class="btn btn-secondary" title="支持直接按 Ctrl+V 粘贴截图或复制的图片">粘贴剪贴板 (Ctrl+V)</button>
+            <button id="btnPickFiles" type="button" class="btn btn-secondary" hidden>添加单张/多张图片</button>
+            <button id="btnPasteClipboard" type="button" class="btn btn-secondary" title="支持直接按 Ctrl+V 粘贴截图或复制的图片" hidden>粘贴剪贴板 (Ctrl+V)</button>
             <button id="btnPickOutputDir" type="button" class="btn btn-secondary">设置输出目录 (推荐)</button>
-            <button id="btnClearCompleted" type="button" class="btn btn-secondary">移除已完成</button>
+            <button id="btnClearCompleted" type="button" class="btn btn-secondary" hidden>移除已完成</button>
             <button id="btnClearAllTasks" type="button" class="btn btn-secondary">清空列表</button>
             <input id="fileInputFallback" type="file" accept=".jpg,.jpeg,.png,.webp" multiple hidden>
           </div>
@@ -119,7 +92,7 @@
           <div id="imageTaskList" class="task-list" tabindex="0" aria-label="待增强商品原图列表（支持拖拽图片或按 Ctrl+V 粘贴剪贴板图片）">
             <div class="empty-cell">
               <div class="drop-empty-title">拖拽图片 / 文件夹到此处，或直接按 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴剪贴板图片</div>
-              <div class="drop-empty-sub">也可点击上方“选择原图文件夹”或“添加单张/多张图片”导入（支持 JPG、JPEG、PNG、WebP）</div>
+              <div class="drop-empty-sub">也可点击上方“选择原图文件夹”导入（支持 JPG、JPEG、PNG、WebP）</div>
             </div>
           </div>
         </div>
@@ -131,29 +104,27 @@
               <label for="promptTextarea">统一图像增强提示词 (Prompt)</label>
               <div class="preset-btns">
                 <button id="btnPresetEcommerce" type="button" class="btn btn-secondary btn-mini">标准电商保真模板</button>
-                <button id="btnPresetUpres" type="button" class="btn btn-secondary btn-mini">高清细节修复模板</button>
+                <button id="btnPresetUpres" type="button" class="btn btn-secondary btn-mini" hidden>高清细节修复模板</button>
               </div>
             </div>
             <textarea id="promptTextarea" rows="7"></textarea>
-            <span class="field-hint">所有任务严格将原图作为参考输入 (<code>imageInputs</code>) 与此提示词组合执行，绝不退化为纯文生图。</span>
+            <span class="field-hint">所有任务均将原图作为参考输入与此提示词组合执行，严格保持商品主体一致。</span>
           </div>
 
           <div class="form-row">
             <div class="form-group">
               <label for="selectModel">图像生成模型 (Google Flow)</label>
               <select id="selectModel">
-                <option value="BELUGA" selected>🍌 Nano Banana 2.1 (BELUGA - 默认推荐)</option>
-                <option value="GEM_PIX_2">🍌 Nano Banana Pro (GEM_PIX_2 - 已实证)</option>
-                <option value="HARBOR_SEAL">🍌 Nano Banana 2 Lite (HARBOR_SEAL)</option>
-                <option value="GEM_PIX">🍌 Nano Banana (GEM_PIX)</option>
+                <option value="BELUGA" selected>NanoBanana 2.1(默认推荐)</option>
+                <option value="GEM_PIX_2">NanoBanana Pro</option>
+                <option value="HARBOR_SEAL">NanoBanana 2 Lite</option>
               </select>
             </div>
             <div class="form-group">
               <label for="selectResolution">输出分辨率策略</label>
               <select id="selectResolution">
-                <option value="2K">高清 2K 超分导出 (SPrCad 2K 放大 - 已实证)</option>
-                <option value="4K">超清 4K 超分导出 (SPrCad 4K 放大 - 已实证)</option>
-                <option value="1K">标准 1K 原生直出 (ogiZ0b 1024px 直出 - 已实证)</option>
+                <option value="2K" selected>2K</option>
+                <option value="1K">1K</option>
               </select>
             </div>
           </div>
@@ -162,11 +133,11 @@
             <div class="form-group">
               <label for="selectAspect">输出宽高比 (Aspect Ratio)</label>
               <select id="selectAspect">
-                <option value="1">1:1 方形主图 (1024×1024, enum=1)</option>
-                <option value="2">9:16 竖版画幅 (768×1376, enum=2)</option>
-                <option value="3">16:9 横版画幅 (1376×768, enum=3)</option>
-                <option value="4">3:4 电商竖图 (896×1200, enum=4)</option>
-                <option value="5">4:3 传统横图 (1200×896, enum=5)</option>
+                <option value="3">16:9</option>
+                <option value="5">4:3</option>
+                <option value="1" selected>1:1</option>
+                <option value="4">3:4</option>
+                <option value="2">9:16</option>
               </select>
             </div>
             <div class="form-group">
@@ -178,9 +149,9 @@
                   <option value="1000-2000">间隔 1~2 秒 (快速)</option>
                 </select>
                 <select id="selectMaxRetries" title="单张失败自动重试次数">
+                  <option value="0" selected>不自动重试</option>
                   <option value="1">失败重试 1 次</option>
                   <option value="2">失败重试 2 次</option>
-                  <option value="0">不自动重试</option>
                 </select>
               </div>
             </div>
@@ -194,62 +165,101 @@
       </div>
     </section>
 
-    <!-- 3. 实时协议监控与脱敏导出器 -->
-    <section class="card" aria-labelledby="sectionSnifferTitle">
-      <div class="card-header">
-        <div>
-          <h2 id="sectionSnifferTitle">三、实时 RPC 协议监控与诊断器（maseQ / ogiZ0b / SPrCad）</h2>
-          <p class="card-desc">
-            实时显示自动队列与手动操作在 Google Flow 中产生的所有底层 <code>batchexecute</code> RPC 通信记录与耗时。
-          </p>
-        </div>
-        <div class="button-group">
-          <button id="btnClearPackets" type="button" class="btn btn-secondary">清空抓包记录</button>
-          <button id="btnExportReport" type="button" class="btn btn-secondary">复制脱敏协议报告</button>
-        </div>
-      </div>
+    <!-- 2. 默认折叠的高级调试与协议诊断模块 (遵循 modern-web-guidance search-hidden-content <details> 规范) -->
+    <details id="debugDisclosure" class="debug-disclosure">
+      <summary class="debug-disclosure-summary">
+        <span>🛠️ 开发者调试与协议诊断模块（默认隐藏，点击可展开查看会话签名、项目 ID 与底层 RPC 抓包日志）</span>
+        <span class="debug-summary-hint">展开 / 收起</span>
+      </summary>
 
-      <div class="schema-summary-grid">
-        <div class="schema-box">
-          <span class="schema-title">1. 参考图上传接口 (maseQ)</span>
-          <code id="sumUploadUrl" class="schema-code">已内置实证结构 (rpcids=maseQ)</code>
-        </div>
-        <div class="schema-box">
-          <span class="schema-title">2. 批量图生图接口 (ogiZ0b)</span>
-          <code id="sumGenerateUrl" class="schema-code">已内置实证结构 (rpcids=ogiZ0b)</code>
-        </div>
-        <div class="schema-box">
-          <span class="schema-title">3. 已观测/同步模型枚举</span>
-          <code id="sumModels" class="schema-code">GEM_PIX_2, NANO_BANANA_2, GEM_PIX</code>
-        </div>
-        <div class="schema-box">
-          <span class="schema-title">4. 2K 超分放大接口 (SPrCad)</span>
-          <code id="sumAspectAndInputs" class="schema-code">已内置实证结构 (rpcids=SPrCad)</code>
-        </div>
-      </div>
+      <div class="debug-disclosure-body">
+        <!-- 会话与环境诊断栏 -->
+        <section class="card" aria-labelledby="sectionAuthTitle">
+          <div class="card-header">
+            <h2 id="sectionAuthTitle">Google Flow 会话与安全上下文状态</h2>
+            <div class="button-group">
+              <button id="btnSyncCatalog" type="button" class="btn btn-secondary btn-mini" title="主动调用 HTrJv 同步当前账号可用模型">同步模型目录</button>
+              <span class="tag tag-ok">非 DOM 桥接模式 (MAIN World batchexecute RPC)</span>
+            </div>
+          </div>
+          <div class="diagnostic-grid">
+            <div class="diag-item">
+              <span class="diag-label">Flow 标签页状态</span>
+              <strong id="diagTabStatus" class="diag-value">未连接</strong>
+            </div>
+            <div class="diag-item">
+              <span class="diag-label">WIZ 会话签名 (at / SNlM0e &amp; f.sid)</span>
+              <strong id="diagTokenStatus" class="diag-value">待检测</strong>
+            </div>
+            <div class="diag-item">
+              <span class="diag-label">当前项目 ID (projectId)</span>
+              <strong id="diagProjectId" class="diag-value">待捕获（请进入 /project/... 页面）</strong>
+            </div>
+            <div class="diag-item">
+              <span class="diag-label">reCAPTCHA Enterprise 状态</span>
+              <strong id="diagRecaptcha" class="diag-value">待检测</strong>
+            </div>
+          </div>
+        </section>
 
-      <div class="table-wrapper">
-        <table class="packet-table">
-          <thead>
-            <tr>
-              <th>时间 &amp; 耗时</th>
-              <th>RPC 分类</th>
-              <th>方法 &amp; 状态</th>
-              <th>接口 URL 路径</th>
-              <th>自动提取摘要</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="packetTableBody">
-            <tr>
-              <td colspan="6" class="empty-cell">
-                暂无抓包记录。启动自动队列或在 Flow 页面操作后将实时显示 RPC 通信详情。
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <!-- 实时协议监控与脱敏导出器 -->
+        <section class="card" aria-labelledby="sectionSnifferTitle">
+          <div class="card-header">
+            <div>
+              <h2 id="sectionSnifferTitle">实时 RPC 协议监控与诊断器（maseQ / ogiZ0b / SPrCad）</h2>
+              <p class="card-desc">
+                实时显示自动队列与手动操作在 Google Flow 中产生的所有底层 <code>batchexecute</code> RPC 通信记录与耗时。
+              </p>
+            </div>
+            <div class="button-group">
+              <button id="btnClearPackets" type="button" class="btn btn-secondary">清空抓包记录</button>
+              <button id="btnExportReport" type="button" class="btn btn-secondary">复制脱敏协议报告</button>
+            </div>
+          </div>
+
+          <div class="schema-summary-grid">
+            <div class="schema-box">
+              <span class="schema-title">1. 参考图上传接口 (maseQ)</span>
+              <code id="sumUploadUrl" class="schema-code">已内置实证结构 (rpcids=maseQ)</code>
+            </div>
+            <div class="schema-box">
+              <span class="schema-title">2. 批量图生图接口 (ogiZ0b)</span>
+              <code id="sumGenerateUrl" class="schema-code">已内置实证结构 (rpcids=ogiZ0b)</code>
+            </div>
+            <div class="schema-box">
+              <span class="schema-title">3. 已观测/同步模型枚举</span>
+              <code id="sumModels" class="schema-code">BELUGA, GEM_PIX_2, HARBOR_SEAL</code>
+            </div>
+            <div class="schema-box">
+              <span class="schema-title">4. 2K 超分放大接口 (SPrCad)</span>
+              <code id="sumAspectAndInputs" class="schema-code">已内置实证结构 (rpcids=SPrCad)</code>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="packet-table">
+              <thead>
+                <tr>
+                  <th>时间 &amp; 耗时</th>
+                  <th>RPC 分类</th>
+                  <th>方法 &amp; 状态</th>
+                  <th>接口 URL 路径</th>
+                  <th>自动提取摘要</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="packetTableBody">
+                <tr>
+                  <td colspan="6" class="empty-cell">
+                    暂无抓包记录。启动自动队列或在 Flow 页面操作后将实时显示 RPC 通信详情。
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
-    </section>
+    </details>
   </main>
 
   <!-- 1. 原图 vs 增强后图片对比预览模态框 (遵循 modern-web-guidance light-dismiss-a-dialog) -->

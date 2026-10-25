@@ -385,37 +385,9 @@ async function checkFlowConnection() {
   }
 }
 
-function populateDiscoveredModels(discoveredList = [], observedList = []) {
-  const currentVal = selectModel.value;
-  const existingValues = new Set(Array.from(selectModel.options).map((o) => o.value));
-
-  if (Array.isArray(observedList)) {
-    for (const modelKey of observedList) {
-      if (modelKey && !existingValues.has(modelKey)) {
-        const opt = document.createElement('option');
-        opt.value = modelKey;
-        opt.textContent = `🍌 已实测捕获模型 (${modelKey})`;
-        selectModel.appendChild(opt);
-        existingValues.add(modelKey);
-      }
-    }
-  }
-
-  if (Array.isArray(discoveredList)) {
-    for (const item of discoveredList) {
-      if (item?.modelKey && !existingValues.has(item.modelKey)) {
-        const opt = document.createElement('option');
-        opt.value = item.modelKey;
-        opt.textContent = `${item.displayName || item.modelKey} [HTrJv 目录]`;
-        selectModel.appendChild(opt);
-        existingValues.add(item.modelKey);
-      }
-    }
-  }
-
-  if (currentVal && existingValues.has(currentVal)) {
-    selectModel.value = currentVal;
-  }
+function populateDiscoveredModels() {
+  // Keep #selectModel strictly limited to the 3 curated options:
+  // NanoBanana 2.1(默认推荐), NanoBanana Pro, NanoBanana 2 Lite
 }
 
 // ============================================================================
@@ -777,7 +749,7 @@ function renderTaskList() {
     const sub = document.createElement('div');
     sub.className = 'drop-empty-sub';
     sub.textContent =
-      '也可点击上方“选择原图文件夹”或“添加单张/多张图片”导入（支持 JPG、JPEG、PNG、WebP）';
+      '也可点击上方“选择原图文件夹”导入（支持 JPG、JPEG、PNG、WebP）';
 
     empty.append(title, sub);
     imageTaskList.appendChild(empty);
@@ -1439,7 +1411,7 @@ async function initWorkbench() {
   const {
     userPrompt,
     selectedModel,
-    defaultModelV025Migrated,
+    defaultModelV027Migrated,
     selectedResolution,
     selectedAspect,
     selectedDelay,
@@ -1447,7 +1419,7 @@ async function initWorkbench() {
   } = await chrome.storage.local.get([
     'userPrompt',
     'selectedModel',
-    'defaultModelV025Migrated',
+    'defaultModelV027Migrated',
     'selectedResolution',
     'selectedAspect',
     'selectedDelay',
@@ -1456,30 +1428,49 @@ async function initWorkbench() {
 
   promptTextarea.value = userPrompt || DEFAULT_ECOMMERCE_PROMPT;
 
-  // Default to Nano Banana 2.1 (BELUGA); migrate once for v0.2.5 so BELUGA is active immediately
-  if (!defaultModelV025Migrated) {
+  const VALID_MODELS = new Set(['BELUGA', 'GEM_PIX_2', 'HARBOR_SEAL']);
+  const VALID_RESOLUTIONS = new Set(['2K', '1K']);
+  const VALID_ASPECTS = new Set(['1', '2', '3', '4', '5']);
+
+  if (!defaultModelV027Migrated) {
     selectModel.value = 'BELUGA';
+    selectResolution.value = VALID_RESOLUTIONS.has(selectedResolution) ? selectedResolution : '2K';
+    selectAspect.value = '1'; // Default 1:1
+    selectMaxRetries.value = '0'; // Default 不自动重试
     await chrome.storage.local.set({
       selectedModel: 'BELUGA',
-      defaultModelV025Migrated: true
+      selectedResolution: selectResolution.value,
+      selectedAspect: '1',
+      selectedMaxRetries: '0',
+      defaultModelV027Migrated: true
     });
-  } else if (selectedModel) {
-    selectModel.value =
-      selectedModel === 'NANO_BANANA_2_AUTO' || selectedModel === 'NARWHAL'
-        ? 'BELUGA'
-        : selectedModel;
   } else {
-    selectModel.value = 'BELUGA';
+    selectModel.value = VALID_MODELS.has(selectedModel) ? selectedModel : 'BELUGA';
+    selectResolution.value = VALID_RESOLUTIONS.has(selectedResolution) ? selectedResolution : '2K';
+    selectAspect.value = VALID_ASPECTS.has(selectedAspect) ? selectedAspect : '1';
+    selectMaxRetries.value =
+      selectedMaxRetries === '0' || selectedMaxRetries === '1' || selectedMaxRetries === '2'
+        ? selectedMaxRetries
+        : '0';
   }
+
+  if (selectedDelay) selectDelay.value = selectedDelay;
 
   selectModel.addEventListener('change', () => {
     chrome.storage.local.set({ selectedModel: selectModel.value });
   });
-
-  if (selectedResolution) selectResolution.value = selectedResolution;
-  if (selectedAspect) selectAspect.value = selectedAspect;
-  if (selectedDelay) selectDelay.value = selectedDelay;
-  if (selectedMaxRetries !== undefined) selectMaxRetries.value = selectedMaxRetries;
+  selectResolution.addEventListener('change', () => {
+    chrome.storage.local.set({ selectedResolution: selectResolution.value });
+  });
+  selectAspect.addEventListener('change', () => {
+    chrome.storage.local.set({ selectedAspect: selectAspect.value });
+  });
+  selectDelay.addEventListener('change', () => {
+    chrome.storage.local.set({ selectedDelay: selectDelay.value });
+  });
+  selectMaxRetries.addEventListener('change', () => {
+    chrome.storage.local.set({ selectedMaxRetries: selectMaxRetries.value });
+  });
 
   await restoreDirHandlesFromDb();
   await restoreTasksFromDb();

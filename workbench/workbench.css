@@ -666,6 +666,10 @@ dialog::backdrop {
   gap: 8px;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .sample-run-group {
   display: inline-flex;
   align-items: center;
@@ -803,4 +807,58 @@ dialog::backdrop {
   max-width: 100%;
   max-height: 54vh;
   object-fit: contain;
+}
+
+/* Collapsible Developer Debug & Diagnostics Module (<details>) */
+.debug-disclosure {
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  background-color: var(--bg-subtle);
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+
+.debug-disclosure[open] {
+  border-style: solid;
+  background-color: transparent;
+}
+
+.debug-disclosure-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.debug-disclosure-summary::-webkit-details-marker {
+  display: none;
+}
+
+.debug-disclosure-summary:hover {
+  color: var(--text-main);
+}
+
+.debug-summary-hint {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+}
+
+.debug-disclosure-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 12px;
+  border-top: 1px solid var(--border-color);
 }
