@@ -529,17 +529,29 @@ dialog {
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
 }
 
+#previewDialog {
+  width: 97vw;
+  max-width: 97vw;
+  height: 95vh;
+  max-height: 95vh;
+}
+
 dialog::backdrop {
-  background-color: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(2px);
+  background-color: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(3px);
 }
 
 .dialog-inner {
-  padding: 20px;
+  padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   max-height: 86vh;
+}
+
+#previewDialog .dialog-inner {
+  height: 100%;
+  max-height: 100%;
 }
 
 .dialog-header {
@@ -763,16 +775,18 @@ dialog::backdrop {
 }
 
 .compare-grid {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  overflow: auto;
-  max-height: 68vh;
+  gap: 14px;
+  overflow: hidden;
 }
 
 @media (max-width: 760px) {
   .compare-grid {
     grid-template-columns: 1fr;
+    overflow: auto;
   }
 }
 
@@ -784,29 +798,117 @@ dialog::backdrop {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
+  height: 100%;
 }
 
 .compare-label {
   font-size: 13px;
   font-weight: 600;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .compare-img-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 280px;
-  max-height: 56vh;
   overflow: hidden;
   background-color: var(--bg-canvas);
   border-radius: 6px;
+  cursor: zoom-in;
+  user-select: none;
+  touch-action: none;
+}
+
+.compare-img-wrap.is-zoomed {
+  cursor: grab;
+}
+
+.compare-img-wrap.is-panning {
+  cursor: grabbing;
 }
 
 .compare-img-wrap img {
+  width: 100%;
+  height: 100%;
   max-width: 100%;
-  max-height: 54vh;
+  max-height: 100%;
   object-fit: contain;
+  transform-origin: center center;
+  /* MANDATORY (individual-transform-properties): Apply identity transformations on base element */
+  translate: 0px 0px;
+  scale: 1;
+  will-change: translate, scale;
+  user-select: none;
+  pointer-events: none;
+}
+
+.zoom-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zoom-reset-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  background-color: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.zoom-reset-btn:hover {
+  background-color: var(--brand-primary);
+  border-color: var(--brand-primary);
+}
+
+.zoom-sync-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  background-color: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  user-select: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.zoom-sync-toggle:hover {
+  background-color: rgba(30, 41, 59, 0.9);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.zoom-sync-toggle:has(input:checked) {
+  background-color: rgba(37, 99, 235, 0.88);
+  border-color: #60a5fa;
+}
+
+.zoom-sync-toggle input[type="checkbox"] {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  accent-color: #3b82f6;
+  cursor: pointer;
 }
 
 /* Collapsible Developer Debug & Diagnostics Module (<details>) */

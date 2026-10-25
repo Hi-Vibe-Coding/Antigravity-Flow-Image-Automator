@@ -13,7 +13,7 @@
     <div class="brand">
       <img src="../icons/icon-48.png" alt="Logo" class="brand-logo" width="32" height="32">
       <div>
-        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.2.7</span></h1>
+        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.1</span></h1>
         <p class="subtitle">Google Flow 批量电商产品图增强工作台</p>
       </div>
     </div>
@@ -274,15 +274,29 @@
       <p id="previewDialogMeta" class="dialog-desc"></p>
       <div class="compare-grid">
         <div class="compare-card">
-          <div class="compare-label">原始商品图片 (Original Reference)</div>
-          <div class="compare-img-wrap">
-            <img id="previewOrigImg" alt="原始商品图">
+          <div class="compare-label">原始商品图片（滚轮缩放 · 按住可拖拽）</div>
+          <div id="origImgWrap" class="compare-img-wrap">
+            <div class="zoom-toolbar">
+              <button id="btnResetOrigZoom" type="button" class="zoom-reset-btn" title="重置左侧图片缩放比例到 100%">100% 重置</button>
+              <label class="zoom-sync-toggle" title="勾选后，缩放或拖动本侧图片时，右侧图片将实时同步跟随显示相同区域">
+                <input id="chkSyncFromOrig" type="checkbox">
+                <span>显示区域同步</span>
+              </label>
+            </div>
+            <img id="previewOrigImg" alt="原始商品图" draggable="false">
           </div>
         </div>
         <div class="compare-card">
-          <div class="compare-label">Google Flow 增强结果 (Enhanced Output)</div>
-          <div class="compare-img-wrap">
-            <img id="previewEnhancedImg" alt="AI 增强商品图">
+          <div class="compare-label">Google Flow 增强结果（滚轮缩放 · 按住可拖拽）</div>
+          <div id="enhancedImgWrap" class="compare-img-wrap">
+            <div class="zoom-toolbar">
+              <button id="btnResetEnhancedZoom" type="button" class="zoom-reset-btn" title="重置右侧图片缩放比例到 100%">100% 重置</button>
+              <label class="zoom-sync-toggle" title="勾选后，缩放或拖动本侧图片时，左侧图片将实时同步跟随显示相同区域">
+                <input id="chkSyncFromEnhanced" type="checkbox">
+                <span>显示区域同步</span>
+              </label>
+            </div>
+            <img id="previewEnhancedImg" alt="AI 增强商品图" draggable="false">
           </div>
         </div>
       </div>

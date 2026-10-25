@@ -99,6 +99,12 @@ const btnExportReport = document.getElementById('btnExportReport');
 const previewDialog = document.getElementById('previewDialog');
 const previewDialogTitle = document.getElementById('previewDialogTitle');
 const previewDialogMeta = document.getElementById('previewDialogMeta');
+const origImgWrap = document.getElementById('origImgWrap');
+const enhancedImgWrap = document.getElementById('enhancedImgWrap');
+const btnResetOrigZoom = document.getElementById('btnResetOrigZoom');
+const btnResetEnhancedZoom = document.getElementById('btnResetEnhancedZoom');
+const chkSyncFromOrig = document.getElementById('chkSyncFromOrig');
+const chkSyncFromEnhanced = document.getElementById('chkSyncFromEnhanced');
 const previewOrigImg = document.getElementById('previewOrigImg');
 const previewEnhancedImg = document.getElementById('previewEnhancedImg');
 
@@ -897,6 +903,195 @@ function renderTaskList() {
   });
 }
 
+function createIndependentZoomController(wrapEl, imgEl, resetBtnEl, onUserTransformChange) {
+  const state = {
+    scale: 1,
+    tx: 0,
+    ty: 0,
+    isPanning: false,
+    startX: 0,
+    startY: 0,
+    startTx: 0,
+    startTy: 0
+  };
+
+  function getRenderedImageBox() {
+    if (!wrapEl || !imgEl) return { width: 1, height: 1 };
+    const cw = wrapEl.clientWidth || 1;
+    const ch = wrapEl.clientHeight || 1;
+    const nw = imgEl.naturalWidth || cw;
+    const nh = imgEl.naturalHeight || ch;
+    const containerRatio = cw / ch;
+    const imgRatio = nw / nh;
+    if (imgRatio > containerRatio) {
+      return { width: cw, height: cw / imgRatio };
+    }
+    return { width: ch * imgRatio, height: ch };
+  }
+
+  function applyTransform(notifyPeer = false) {
+    if (!imgEl) return;
+    // Use individual CSS transform properties (`translate` and `scale`)
+    imgEl.style.translate = `${state.tx}px ${state.ty}px`;
+    imgEl.style.scale = String(state.scale);
+    if (wrapEl) {
+      wrapEl.classList.toggle('is-zoomed', state.scale > 1.01);
+    }
+    if (resetBtnEl) {
+      const pct = Math.round(state.scale * 100);
+      resetBtnEl.textContent = pct === 100 ? '100% 重置' : `${pct}% · 重置 100%`;
+    }
+    if (notifyPeer && typeof onUserTransformChange === 'function') {
+      onUserTransformChange(getViewportState());
+    }
+  }
+
+  function resetZoom(notifyPeer = false) {
+    state.scale = 1;
+    state.tx = 0;
+    state.ty = 0;
+    state.isPanning = false;
+    if (wrapEl) wrapEl.classList.remove('is-panning', 'is-zoomed');
+    applyTransform(notifyPeer);
+  }
+
+  function getViewportState() {
+    const box = getRenderedImageBox();
+    return {
+      scale: state.scale,
+      normTx: state.tx / (box.width || 1),
+      normTy: state.ty / (box.height || 1)
+    };
+  }
+
+  function syncToViewportState(sourceView) {
+    if (!sourceView) return;
+    const box = getRenderedImageBox();
+    state.scale = sourceView.scale;
+    state.tx = Number((sourceView.normTx * (box.width || 1)).toFixed(2));
+    state.ty = Number((sourceView.normTy * (box.height || 1)).toFixed(2));
+    state.isPanning = false;
+    if (wrapEl) wrapEl.classList.remove('is-panning');
+    applyTransform(false);
+  }
+
+  if (wrapEl) {
+    wrapEl.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const rect = wrapEl.getBoundingClientRect();
+        const cursorX = e.clientX - (rect.left + rect.width / 2);
+        const cursorY = e.clientY - (rect.top + rect.height / 2);
+
+        const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+        const nextScale = Math.min(8, Math.max(0.5, Number((state.scale * zoomFactor).toFixed(3))));
+        if (nextScale === state.scale) return;
+
+        if (Math.abs(nextScale - 1) < 0.04) {
+          resetZoom(true);
+          return;
+        }
+
+        const ratio = nextScale / state.scale;
+        state.tx = cursorX - (cursorX - state.tx) * ratio;
+        state.ty = cursorY - (cursorY - state.ty) * ratio;
+        state.scale = nextScale;
+        applyTransform(true);
+      },
+      { passive: false }
+    );
+
+    wrapEl.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || (e.target && e.target.closest('.zoom-toolbar'))) return;
+      state.isPanning = true;
+      state.startX = e.clientX;
+      state.startY = e.clientY;
+      state.startTx = state.tx;
+      state.startTy = state.ty;
+      wrapEl.classList.add('is-panning');
+      try {
+        wrapEl.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+    });
+
+    wrapEl.addEventListener('pointermove', (e) => {
+      if (!state.isPanning) return;
+      state.tx = state.startTx + (e.clientX - state.startX);
+      state.ty = state.startTy + (e.clientY - state.startY);
+      applyTransform(true);
+    });
+
+    const endPan = (e) => {
+      if (!state.isPanning) return;
+      state.isPanning = false;
+      wrapEl.classList.remove('is-panning');
+      try {
+        wrapEl.releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+    };
+
+    wrapEl.addEventListener('pointerup', endPan);
+    wrapEl.addEventListener('pointercancel', endPan);
+  }
+
+  if (resetBtnEl) {
+    resetBtnEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      resetZoom(true);
+    });
+  }
+
+  return { resetZoom, getViewportState, syncToViewportState };
+}
+
+let origZoomCtrl = null;
+let enhancedZoomCtrl = null;
+
+origZoomCtrl = createIndependentZoomController(
+  origImgWrap,
+  previewOrigImg,
+  btnResetOrigZoom,
+  (viewState) => {
+    if (chkSyncFromOrig && chkSyncFromOrig.checked && enhancedZoomCtrl) {
+      enhancedZoomCtrl.syncToViewportState(viewState);
+    }
+  }
+);
+
+enhancedZoomCtrl = createIndependentZoomController(
+  enhancedImgWrap,
+  previewEnhancedImg,
+  btnResetEnhancedZoom,
+  (viewState) => {
+    if (chkSyncFromEnhanced && chkSyncFromEnhanced.checked && origZoomCtrl) {
+      origZoomCtrl.syncToViewportState(viewState);
+    }
+  }
+);
+
+if (chkSyncFromOrig) {
+  chkSyncFromOrig.addEventListener('change', () => {
+    if (chkSyncFromOrig.checked) {
+      enhancedZoomCtrl.syncToViewportState(origZoomCtrl.getViewportState());
+    }
+  });
+}
+
+if (chkSyncFromEnhanced) {
+  chkSyncFromEnhanced.addEventListener('change', () => {
+    if (chkSyncFromEnhanced.checked) {
+      origZoomCtrl.syncToViewportState(enhancedZoomCtrl.getViewportState());
+    }
+  });
+}
+
 function openBeforeAfterModal(task) {
   previewDialogTitle.textContent = `原图 vs 增强结果对比 — ${task.name}`;
   const dims = task.enhancedDimensions
@@ -907,6 +1102,8 @@ function openBeforeAfterModal(task) {
   } | 耗时: ${task.durationMs ? (task.durationMs / 1000).toFixed(1) + 's' : '-'}`;
   previewOrigImg.src = task.thumbUrl;
   previewEnhancedImg.src = task.enhancedThumbUrl;
+  origZoomCtrl.resetZoom();
+  enhancedZoomCtrl.resetZoom();
   previewDialog.showModal();
 }
 
