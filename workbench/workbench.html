@@ -139,7 +139,8 @@
               <label for="selectModel">图像生成模型 (Google Flow)</label>
               <select id="selectModel">
                 <option value="GEM_PIX_2">🍌 Nano Banana Pro (GEM_PIX_2 - 已实证)</option>
-                <option value="NANO_BANANA_2_AUTO">🍌 Nano Banana 2.1 / 2 (自动适配 HTrJv / NARWHAL)</option>
+                <option value="NARWHAL">🍌 Nano Banana 2.1 / 2 (NARWHAL - 已实证)</option>
+                <option value="HARBOR_SEAL">🍌 Nano Banana Lite (HARBOR_SEAL - 已实证)</option>
                 <option value="GEM_PIX">🍌 Nano Banana (GEM_PIX - 已实证)</option>
               </select>
             </div>
@@ -147,6 +148,7 @@
               <label for="selectResolution">输出分辨率策略</label>
               <select id="selectResolution">
                 <option value="2K">高清 2K 超分导出 (SPrCad 2K 放大 - 已实证)</option>
+                <option value="4K">超清 4K 超分导出 (SPrCad 4K 放大 - 已实证)</option>
                 <option value="1K">标准 1K 原生直出 (ogiZ0b 1024px 直出 - 已实证)</option>
               </select>
             </div>
@@ -156,11 +158,11 @@
             <div class="form-group">
               <label for="selectAspect">输出宽高比 (Aspect Ratio)</label>
               <select id="selectAspect">
-                <option value="1">1:1 方形主图 (已实证 enum=1)</option>
-                <option value="2">16:9 横版画幅 (enum=2)</option>
-                <option value="3">9:16 竖版画幅 (enum=3)</option>
-                <option value="4">4:3 横版画幅 (enum=4)</option>
-                <option value="5">3:4 竖版画幅 (enum=5)</option>
+                <option value="1">1:1 方形主图 (1024×1024, enum=1)</option>
+                <option value="2">9:16 竖版画幅 (768×1376, enum=2)</option>
+                <option value="3">16:9 横版画幅 (1376×768, enum=3)</option>
+                <option value="4">3:4 电商竖图 (896×1200, enum=4)</option>
+                <option value="5">4:3 传统横图 (1200×896, enum=5)</option>
               </select>
             </div>
             <div class="form-group">

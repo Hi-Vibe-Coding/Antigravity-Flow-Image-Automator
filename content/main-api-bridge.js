@@ -1,26 +1,25 @@
 // content/main-api-bridge.js
 // Runs in MAIN world at document_start on https://flow.google.com/* and https://labs.google/fx/*
 // Strictly NON-DOM:
-// 1. Supports Google Flow's Boq/Angular `batchexecute` RPC protocol (/_/AiSandboxAngularFrontend/data/batchexecute)
-//    - maseQ: Upload reference image -> returns uploadedMediaId
-//    - ogiZ0b: Image-to-Image generation (strictly binds uploadedMediaId in [1][0][2]) -> returns generatedMediaId & 1K signed URL
-//    - SPrCad: 2K/4K high-resolution upscale -> returns upscaledMediaId & raw Base64 2K JPEG
-//    - as29s: Fetch fresh signed CDN URL for any mediaId
-//    - HTrJv: Fetch full account model & parameter catalog
-// 2. Decodes URL-encoded `f.req` nested JSON request payloads and `)]}'` + `wrb.fr` nested JSON responses.
-// 3. Extracts Google WIZ_global_data session tokens (`at` = SNlM0e, `f.sid` = FdrFJe, `bl` = cfb2h) and reCAPTCHA Enterprise siteKey.
+// 1. Defeats Google Flow's `x2a` anti-extension reCAPTCHA trap (`action: "extension_hijack_detected"`) via:
+//    - Path A (Pristine Capture at document_start): 3-level Object.defineProperty trap + 2ms poll before `x2a` runs.
+//    - Path B (Object.assign Neuter): intercepts `Object.assign({}, f, { action: "extension_hijack_detected" })`
+//      inside `x2a`'s wrapper and restores the required `action: "IMAGE_GENERATION"` before calling the real `execute`.
+// 2. Executes Google Flow's `batchexecute` RPC pipeline (`maseQ` upload -> `ogiZ0b` generate -> `SPrCad` 2K/4K upscale)
+//    with `CAPTCHA_IMAGE = "IMAGE_GENERATION"`.
 
 (function () {
-  const BRIDGE_VERSION = '0.2.0';
+  const BRIDGE_VERSION = '0.2.2';
   const BRIDGE_SOURCE_MAIN = 'ANTIGRAVITY_FLOW_MAIN_BRIDGE';
   const BRIDGE_SOURCE_ISOLATED = 'ANTIGRAVITY_FLOW_ISOLATED_RELAY';
+  const DEFAULT_FLOW_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
+  const CAPTCHA_ACTION_IMAGE = 'IMAGE_GENERATION';
 
-  // Background telemetry / history sync RPC IDs to ignore in UI packet table (still used to harvest `at`/`bl`/`f.sid`)
   const IGNORED_TELEMETRY_RPCIDS = new Set(['WuwhI', 'nzlxg']);
 
   const bridgeState = window.__ANTIGRAVITY_FLOW_BRIDGE_STATE__ || {
     lastSiteKey: null,
-    lastAction: null,
+    lastAction: CAPTCHA_ACTION_IMAGE,
     lastProjectId: null,
     wizAtToken: null,
     wizFSid: null,
@@ -30,19 +29,346 @@
     observedModels: [],
     observedAspectRatios: [],
     discoveredImageModels: [],
-    catalogFetched: false
+    catalogFetched: false,
+    pristineExecute: null,
+    x2aTrapDetected: false,
+    captureSource: null
   };
   window.__ANTIGRAVITY_FLOW_BRIDGE_STATE__ = bridgeState;
   window.__ANTIGRAVITY_FLOW_BRIDGE_VERSION__ = BRIDGE_VERSION;
 
-  // Use native fetch reference so our own active RPC calls don't recurse infinitely if not needed,
-  // though we still log active RPC calls clearly.
   const nativeFetch = window.__ANTIGRAVITY_NATIVE_FETCH__ || window.fetch.bind(window);
   window.__ANTIGRAVITY_NATIVE_FETCH__ = nativeFetch;
+  const realObjectAssign = window.__ANTIGRAVITY_REAL_OBJECT_ASSIGN__ || Object.assign;
+  window.__ANTIGRAVITY_REAL_OBJECT_ASSIGN__ = realObjectAssign;
+
+  // ============================================================================
+  // 1. ANTI-HIJACK BYPASS FOR GRECAPTCHA.ENTERPRISE.EXECUTE (DEFEATS x2a TRAP)
+  // ============================================================================
+  // Flow's frontend overwrites `grecaptcha.enterprise.execute` with:
+  //   c.execute = (e, f) => d(e, Object.assign({}, f, { action: "extension_hijack_detected" }))
+  // Any token minted with action="extension_hijack_detected" is rejected by `ogiZ0b`
+  // with `PUBLIC_ERROR_UNUSUAL_ACTIVITY`.
+
+  function savePristineExecute(fn, enterprise, source) {
+    if (bridgeState.pristineExecute || typeof fn !== 'function') return false;
+    try {
+      const fnSrc = Function.prototype.toString.call(fn);
+      if (fnSrc.includes('extension_hijack_detected')) {
+        bridgeState.x2aTrapDetected = true;
+        return false;
+      }
+    } catch {
+      // Native or bound function
+    }
+    bridgeState.pristineExecute = fn.bind(enterprise);
+    bridgeState.captureSource = source;
+    Promise.resolve().then(cleanAllPropertyTraps);
+    return true;
+  }
+
+  function cleanSinglePropertyTrap(obj, prop) {
+    try {
+      const desc = Object.getOwnPropertyDescriptor(obj, prop);
+      if (!desc || (!desc.get && !desc.set)) return;
+      Object.defineProperty(obj, prop, {
+        value: desc.get ? desc.get() : undefined,
+        writable: true,
+        configurable: true,
+        enumerable: true
+      });
+    } catch {
+      // Ignore if non-configurable
+    }
+  }
+
+  let trapsCleaned = false;
+  function cleanAllPropertyTraps() {
+    if (trapsCleaned) return;
+    trapsCleaned = true;
+    try {
+      const gc = window.grecaptcha;
+      if (gc) {
+        const ent = gc.enterprise;
+        if (ent) cleanSinglePropertyTrap(ent, 'execute');
+        cleanSinglePropertyTrap(gc, 'enterprise');
+      }
+      cleanSinglePropertyTrap(window, 'grecaptcha');
+    } catch {
+      // Ignore
+    }
+  }
+
+  function watchEnterpriseExecute(enterprise) {
+    let val = enterprise.execute;
+    if (typeof val === 'function' && savePristineExecute(val, enterprise, 'L3-immediate')) {
+      return;
+    }
+    try {
+      Object.defineProperty(enterprise, 'execute', {
+        get() {
+          return val;
+        },
+        set(fn) {
+          val = fn;
+          savePristineExecute(fn, enterprise, 'L3-setter');
+        },
+        configurable: true,
+        enumerable: true
+      });
+    } catch {
+      // Fall through to poll
+    }
+  }
+
+  function watchGrecaptchaEnterprise(grecaptcha) {
+    let val = grecaptcha.enterprise;
+    if (val && typeof val === 'object') {
+      watchEnterpriseExecute(val);
+    }
+    try {
+      Object.defineProperty(grecaptcha, 'enterprise', {
+        get() {
+          return val;
+        },
+        set(obj) {
+          val = obj;
+          if (obj && typeof obj === 'object') {
+            watchEnterpriseExecute(obj);
+          }
+        },
+        configurable: true,
+        enumerable: true
+      });
+    } catch {
+      // Ignore
+    }
+  }
+
+  if (!window.__ANTIGRAVITY_HIJACK_TRAP_INSTALLED__) {
+    window.__ANTIGRAVITY_HIJACK_TRAP_INSTALLED__ = true;
+
+    let gcVal = window.grecaptcha;
+    if (gcVal && typeof gcVal === 'object') {
+      watchGrecaptchaEnterprise(gcVal);
+    } else {
+      try {
+        Object.defineProperty(window, 'grecaptcha', {
+          get() {
+            return gcVal;
+          },
+          set(obj) {
+            gcVal = obj;
+            if (obj && typeof obj === 'object') {
+              watchGrecaptchaEnterprise(obj);
+            }
+          },
+          configurable: true,
+          enumerable: true
+        });
+      } catch {
+        // Ignore
+      }
+    }
+
+    const fastPollId = setInterval(() => {
+      if (bridgeState.pristineExecute) {
+        clearInterval(fastPollId);
+        return;
+      }
+      try {
+        const exec = window.grecaptcha?.enterprise?.execute;
+        if (typeof exec === 'function') {
+          savePristineExecute(exec, window.grecaptcha.enterprise, 'poll-2ms');
+          if (bridgeState.pristineExecute) clearInterval(fastPollId);
+        }
+      } catch {
+        // Ignore
+      }
+    }, 2);
+    setTimeout(() => clearInterval(fastPollId), 30000);
+  }
 
   /**
-   * Generate uppercase UUID v4 (matching Google Flow's maseQ / ogiZ0b UUID format)
+   * Discover reCAPTCHA Enterprise siteKey from ___grecaptcha_cfg, performance resources, or DOM script tags
    */
+  function discoverRecaptchaSiteKey() {
+    try {
+      const clients = window.___grecaptcha_cfg?.clients;
+      if (clients && typeof clients === 'object') {
+        for (const k of Object.keys(clients)) {
+          const c = clients[k];
+          if (c && typeof c.sitekey === 'string' && c.sitekey.length >= 25) {
+            bridgeState.lastSiteKey = c.sitekey;
+            return c.sitekey;
+          }
+        }
+      }
+    } catch {
+      // Fall through
+    }
+
+    if (bridgeState.lastSiteKey && bridgeState.lastSiteKey.length >= 25) {
+      return bridgeState.lastSiteKey;
+    }
+
+    try {
+      if (typeof performance !== 'undefined' && typeof performance.getEntriesByType === 'function') {
+        const resources = performance.getEntriesByType('resource') || [];
+        for (const r of resources) {
+          const name = r.name || '';
+          if (name.includes('recaptcha')) {
+            const m = name.match(/[?&](?:k|render)=(6L[0-9A-Za-z_-]{30,50})/);
+            if (m && m[1]) {
+              bridgeState.lastSiteKey = m[1];
+              return m[1];
+            }
+          }
+        }
+      }
+
+      if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
+        const els = document.querySelectorAll('script[src*="recaptcha"], iframe[src*="recaptcha"]');
+        for (const el of els) {
+          const src = el.getAttribute('src') || '';
+          const m = src.match(/[?&](?:k|render)=(6L[0-9A-Za-z_-]{30,50})/);
+          if (m && m[1]) {
+            bridgeState.lastSiteKey = m[1];
+            return m[1];
+          }
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
+    bridgeState.lastSiteKey = DEFAULT_FLOW_SITE_KEY;
+    return DEFAULT_FLOW_SITE_KEY;
+  }
+
+  function waitRecaptchaReady(timeoutMs = 3500) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (!done) {
+          done = true;
+          resolve();
+        }
+      };
+      try {
+        window.grecaptcha?.enterprise?.ready?.(finish);
+      } catch {
+        // Ignore
+      }
+      setTimeout(finish, timeoutMs);
+    });
+  }
+
+  /**
+   * Execute grecaptcha.enterprise.execute while neutralizing Flow's `x2a` Object.assign poison wrapper!
+   * Even if `x2a` wrapped `window.grecaptcha.enterprise.execute` with:
+   *   (e, f) => d(e, Object.assign({}, f, { action: "extension_hijack_detected" }))
+   * replacing `Object.assign` during the synchronous call strips `"extension_hijack_detected"`
+   * and restores `targetAction` (`"IMAGE_GENERATION"`) before handing it to the real `d`!
+   */
+  async function executeWithAssignNeuter(siteKey, targetAction) {
+    Object.assign = function (target, ...sources) {
+      const result = realObjectAssign.call(this, target, ...sources);
+      if (result && typeof result === 'object' && result.action === 'extension_hijack_detected') {
+        bridgeState.x2aTrapDetected = true;
+        result.action = targetAction;
+      }
+      return result;
+    };
+
+    try {
+      await waitRecaptchaReady(2500);
+      const token = await Promise.race([
+        window.grecaptcha.enterprise.execute(siteKey, { action: targetAction }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('grecaptcha.enterprise.execute 超时 (10s)')), 10000)
+        )
+      ]);
+      return token ? String(token) : null;
+    } finally {
+      Object.assign = realObjectAssign;
+    }
+  }
+
+  async function executeWithPristine(siteKey, targetAction) {
+    if (typeof bridgeState.pristineExecute !== 'function') return null;
+    const token = await Promise.race([
+      bridgeState.pristineExecute(siteKey, { action: targetAction }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('pristine grecaptcha.execute 超时 (10s)')), 10000)
+      )
+    ]);
+    return token ? String(token) : null;
+  }
+
+  let captchaMintQueue = Promise.resolve();
+
+  /**
+   * Mint a clean, single-use reCAPTCHA Enterprise token with `action = "IMAGE_GENERATION"`
+   * Serialized via `captchaMintQueue` so concurrent calls never race on `Object.assign` or grecaptcha.
+   */
+  async function getFreshRecaptchaToken(actionName = CAPTCHA_ACTION_IMAGE) {
+    const prev = captchaMintQueue.catch(() => {});
+    let releaseQueue;
+    captchaMintQueue = new Promise((resolve) => {
+      releaseQueue = resolve;
+    });
+    await prev;
+
+    try {
+      const siteKey = discoverRecaptchaSiteKey();
+      const gre = window.grecaptcha?.enterprise || window.grecaptcha;
+      if (!gre && !bridgeState.pristineExecute) {
+        throw new Error('Google Flow 页面中的 grecaptcha.enterprise 尚未加载完成，请刷新 Flow 页面后重试');
+      }
+
+      // Check if current public execute is x2a-trapped
+      try {
+        const currentExec = window.grecaptcha?.enterprise?.execute;
+        if (typeof currentExec === 'function') {
+          const src = Function.prototype.toString.call(currentExec);
+          if (src.includes('extension_hijack_detected')) {
+            bridgeState.x2aTrapDetected = true;
+          } else if (!bridgeState.pristineExecute) {
+            savePristineExecute(currentExec, window.grecaptcha.enterprise, 'late-clean');
+          }
+        }
+      } catch {
+        // Ignore
+      }
+
+      let lastErr = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          // 1. Try pristine execute if captured before x2a ran
+          if (typeof bridgeState.pristineExecute === 'function') {
+            const token = await executeWithPristine(siteKey, actionName);
+            if (token) return token;
+          }
+          // 2. Always works even when x2a is active: Object.assign neuter!
+          const neuteredToken = await executeWithAssignNeuter(siteKey, actionName);
+          if (neuteredToken) return neuteredToken;
+        } catch (err) {
+          lastErr = err;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+
+      throw lastErr || new Error('获取 reCAPTCHA Enterprise Token 失败');
+    } finally {
+      releaseQueue();
+    }
+  }
+
+  // ============================================================================
+  // 2. WIZ_GLOBAL_DATA & PROTOCOL SNIFFER HELPERS
+  // ============================================================================
+
   function generateUpperUuid() {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
       return crypto.randomUUID().toUpperCase();
@@ -56,9 +382,6 @@
       .toUpperCase();
   }
 
-  /**
-   * Extract projectId from current page URL (e.g. https://flow.google.com/project/97501d80-345a-4374-aa2c-22991179112a)
-   */
   function detectProjectIdFromLocation() {
     const match =
       location.pathname.match(/\/project\/([0-9a-fA-F-]{8,}|[^/?#]+)/) ||
@@ -67,12 +390,10 @@
       bridgeState.lastProjectId = match[1];
       return match[1];
     }
-    return bridgeState.lastProjectId;
+    bridgeState.lastProjectId = null;
+    return null;
   }
 
-  /**
-   * Normalize potentially relative URLs into full URLs
-   */
   function normalizeUrl(rawUrl) {
     if (!rawUrl || typeof rawUrl !== 'string') return '';
     try {
@@ -82,9 +403,6 @@
     }
   }
 
-  /**
-   * Scan Google's WIZ_global_data and inline <script> tags on flow.google.com for `at` (SNlM0e), `f.sid` (FdrFJe), and `bl` (cfb2h)
-   */
   function scanWizGlobalData() {
     try {
       const wiz = window.WIZ_global_data;
@@ -103,7 +421,6 @@
         }
       }
 
-      // Fallback: scan inline script text if SNlM0e / cfb2h not yet populated
       if ((!bridgeState.wizAtToken || !bridgeState.wizBuildLabel) && document.scripts) {
         for (let i = 0; i < document.scripts.length; i++) {
           const txt = document.scripts[i].textContent || '';
@@ -127,129 +444,10 @@
         }
       }
     } catch {
-      // Ignore access errors
-    }
-  }
-
-  /**
-   * Discover reCAPTCHA Enterprise siteKey from performance resource entries, DOM script/iframe tags, or ___grecaptcha_cfg
-   */
-  function discoverRecaptchaSiteKey() {
-    if (bridgeState.lastSiteKey && bridgeState.lastSiteKey.length >= 25) {
-      return bridgeState.lastSiteKey;
-    }
-
-    try {
-      // 1. Check performance resource URLs (e.g. recaptcha/enterprise.js?render=6L... or anchor?ar=1&k=6L...)
-      if (typeof performance !== 'undefined' && typeof performance.getEntriesByType === 'function') {
-        const resources = performance.getEntriesByType('resource') || [];
-        for (const r of resources) {
-          const name = r.name || '';
-          if (name.includes('recaptcha')) {
-            const m = name.match(/[?&](?:k|render)=(6L[0-9A-Za-z_-]{30,50})/);
-            if (m && m[1]) {
-              bridgeState.lastSiteKey = m[1];
-              return m[1];
-            }
-          }
-        }
-      }
-
-      // 2. Check script and iframe elements in document (read-only attribute check, zero DOM modification)
-      if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
-        const els = document.querySelectorAll('script[src*="recaptcha"], iframe[src*="recaptcha"]');
-        for (const el of els) {
-          const src = el.getAttribute('src') || '';
-          const m = src.match(/[?&](?:k|render)=(6L[0-9A-Za-z_-]{30,50})/);
-          if (m && m[1]) {
-            bridgeState.lastSiteKey = m[1];
-            return m[1];
-          }
-        }
-      }
-
-      // 3. Check window.___grecaptcha_cfg.clients
-      const clients = window.___grecaptcha_cfg?.clients;
-      if (clients && typeof clients === 'object') {
-        const visited = new Set();
-        function findKeyInObj(obj, depth = 0) {
-          if (!obj || typeof obj !== 'object' || depth > 5 || visited.has(obj)) return null;
-          visited.add(obj);
-          for (const val of Object.values(obj)) {
-            if (typeof val === 'string' && /^6L[0-9A-Za-z_-]{38}$/.test(val)) {
-              return val;
-            }
-            if (val && typeof val === 'object') {
-              const found = findKeyInObj(val, depth + 1);
-              if (found) return found;
-            }
-          }
-          return null;
-        }
-        const cfgKey = findKeyInObj(clients);
-        if (cfgKey) {
-          bridgeState.lastSiteKey = cfgKey;
-          return cfgKey;
-        }
-      }
-    } catch {
       // Ignore
     }
-
-    return bridgeState.lastSiteKey;
   }
 
-  /**
-   * Acquire a fresh reCAPTCHA Enterprise token in MAIN world
-   */
-  async function getFreshRecaptchaToken(actionFallback = 'FLOW_GENERATION') {
-    const siteKey = discoverRecaptchaSiteKey();
-    const gre = window.grecaptcha?.enterprise || window.grecaptcha;
-    if (!gre || typeof gre.execute !== 'function') {
-      throw new Error('Google Flow 页面中的 grecaptcha.enterprise 尚未加载完成，请刷新 Flow 页面后重试');
-    }
-    if (!siteKey) {
-      throw new Error('尚未检测到 reCAPTCHA Enterprise SiteKey，请先刷新 Google Flow 页面');
-    }
-
-    const action = bridgeState.lastAction || actionFallback;
-    return await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error('获取 reCAPTCHA Enterprise Token 超时 (15秒)'));
-      }, 15000);
-
-      try {
-        const runExecute = () => {
-          Promise.resolve(gre.execute(siteKey, { action }))
-            .then((token) => {
-              clearTimeout(timer);
-              if (!token || typeof token !== 'string') {
-                reject(new Error('grecaptcha.enterprise.execute 返回了空 Token'));
-                return;
-              }
-              resolve(token);
-            })
-            .catch((err) => {
-              clearTimeout(timer);
-              reject(err);
-            });
-        };
-
-        if (typeof gre.ready === 'function') {
-          gre.ready(runExecute);
-        } else {
-          runExecute();
-        }
-      } catch (err) {
-        clearTimeout(timer);
-        reject(err);
-      }
-    });
-  }
-
-  /**
-   * Extract rpcids, f.sid, and bl query parameters from a batchexecute URL
-   */
   function getRpcIdFromUrl(urlStr) {
     try {
       const u = new URL(urlStr, location.origin);
@@ -265,9 +463,6 @@
     }
   }
 
-  /**
-   * Harvest `at` token from any URL-encoded body string (even telemetry RPCs like WuwhI)
-   */
   function harvestAtTokenFromRawBody(rawBody) {
     if (!rawBody) return;
     try {
@@ -285,9 +480,6 @@
     }
   }
 
-  /**
-   * Determine if a request URL belongs to Google Flow's core API/RPC traffic (for UI capture logging)
-   */
   function isTargetApiUrl(rawUrl, method = 'GET') {
     const urlStr = normalizeUrl(rawUrl);
     if (!urlStr) return false;
@@ -381,9 +573,6 @@
     return null;
   }
 
-  /**
-   * Parse Google `batchexecute` URL-encoded request body (`f.req=...&at=...`)
-   */
   function parseRequestBody(rawBodyStr) {
     if (!rawBodyStr || typeof rawBodyStr !== 'string') return null;
 
@@ -452,9 +641,6 @@
     return { _rawTextPreview: rawBodyStr.slice(0, 500) };
   }
 
-  /**
-   * Parse Google `batchexecute` response (`)]}'\n\n<len>\n[["wrb.fr","<rpcId>","<innerJsonStr>",...]]`)
-   */
   function parseResponseBody(respText) {
     if (!respText || typeof respText !== 'string') return null;
     const trimmed = respText.trim();
@@ -498,7 +684,6 @@
       }
 
       if (wrbChunks.length > 0) {
-        // If this is HTrJv, parse model catalog from the full untruncated response!
         for (const chunk of wrbChunks) {
           if (chunk.rpcId === 'HTrJv' && chunk.parsedResult) {
             parseHTrJvModelCatalog(chunk.parsedResult);
@@ -520,9 +705,6 @@
     }
   }
 
-  /**
-   * Parse untruncated HTrJv model catalog response to extract exact image model IDs and display names
-   */
   function parseHTrJvModelCatalog(parsedResult) {
     try {
       const root = Array.isArray(parsedResult?.[0]) ? parsedResult[0] : parsedResult;
@@ -531,7 +713,6 @@
       const displayMap = new Map();
       const foundModels = [];
 
-      // 1. Scan for [key, [displayName]] pairs (typically in root[3])
       for (const section of root) {
         if (!Array.isArray(section)) continue;
         for (const entry of section) {
@@ -546,7 +727,6 @@
         }
       }
 
-      // 2. Scan for [familyName, [[variantKey, ...], ...]] groups (typically in root[4] and root[5])
       for (const section of root) {
         if (!Array.isArray(section)) continue;
         for (const group of section) {
@@ -568,6 +748,7 @@
                   combinedStr.includes('banana') ||
                   combinedStr.includes('gem_pix') ||
                   combinedStr.includes('narwhal') ||
+                  combinedStr.includes('harbor_seal') ||
                   combinedStr.includes('imagen') ||
                   combinedStr.includes('image')
                 ) {
@@ -583,31 +764,12 @@
         }
       }
 
-      // 3. Also include any direct displayMap entries for Nano Banana / GEM_PIX / NARWHAL / IMAGEN
-      for (const [key, label] of displayMap.entries()) {
-        const lower = `${key} ${label}`.toLowerCase();
-        if (
-          lower.includes('banana') ||
-          lower.includes('gem_pix') ||
-          lower.includes('narwhal') ||
-          lower.includes('imagen')
-        ) {
-          if (!foundModels.some((m) => m.modelKey === key)) {
-            foundModels.push({
-              modelKey: key,
-              groupName: label,
-              displayName: `${label} (${key})`
-            });
-          }
-        }
-      }
-
       if (foundModels.length > 0) {
         bridgeState.discoveredImageModels = foundModels;
         bridgeState.catalogFetched = true;
       }
-    } catch (err) {
-      console.debug('[FlowAutomator Bridge] HTrJv catalog parse notice:', err);
+    } catch {
+      // Ignore
     }
   }
 
@@ -671,9 +833,6 @@
     return value;
   }
 
-  /**
-   * Extract key metadata from parsed batchexecute payloads (specifically recognizing ogiZ0b array indices!)
-   */
   function extractProtocolMeta(urlStr, parsedReq, parsedResp) {
     scanWizGlobalData();
     discoverRecaptchaSiteKey();
@@ -693,7 +852,6 @@
       returnedMediaIds: []
     };
 
-    // Specifically parse ogiZ0b request structure: calls[0].parsedArgs[1][0]
     if (rpcId === 'ogiZ0b' && Array.isArray(parsedReq?.calls)) {
       const args = parsedReq.calls[0]?.parsedArgs;
       const item0 = args?.[1]?.[0];
@@ -718,35 +876,6 @@
         }
       }
     }
-
-    function scanReqTree(node) {
-      if (!node) return;
-      if (typeof node === 'string') {
-        if (
-          !meta.imageModelName &&
-          (node.includes('GEM_PIX') ||
-            node.includes('IMAGEN') ||
-            node.includes('NANO') ||
-            node.includes('BANANA') ||
-            node.includes('NARWHAL') ||
-            node.includes('narwhal'))
-        ) {
-          meta.imageModelName = node;
-          if (!bridgeState.observedModels.includes(node)) {
-            bridgeState.observedModels.push(node);
-          }
-        }
-        return;
-      }
-      if (Array.isArray(node)) {
-        for (const item of node) scanReqTree(item);
-        return;
-      }
-      if (typeof node === 'object') {
-        for (const v of Object.values(node)) scanReqTree(v);
-      }
-    }
-    scanReqTree(parsedReq);
 
     function scanRespTree(node) {
       if (!node) return;
@@ -774,68 +903,16 @@
     return meta;
   }
 
-  /**
-   * Hook grecaptcha.enterprise.execute and grecaptcha.enterprise.ready to capture siteKey and action
-   */
-  function hookRecaptchaEnterprise() {
-    discoverRecaptchaSiteKey();
-    try {
-      const targets = [window.grecaptcha?.enterprise, window.grecaptcha].filter(Boolean);
-      for (const gre of targets) {
-        if (typeof gre.execute === 'function' && !gre.execute.__antigravityHooked) {
-          const origExecute = gre.execute.bind(gre);
-          const wrappedExecute = function (siteKey, options) {
-            if (siteKey && typeof siteKey === 'string') {
-              bridgeState.lastSiteKey = siteKey;
-            }
-            if (options && typeof options.action === 'string') {
-              bridgeState.lastAction = options.action;
-            }
-            window.postMessage(
-              {
-                source: BRIDGE_SOURCE_MAIN,
-                type: 'RECAPTCHA_META_CAPTURED',
-                payload: {
-                  siteKey: bridgeState.lastSiteKey,
-                  action: bridgeState.lastAction
-                }
-              },
-              '*'
-            );
-            return origExecute(siteKey, options);
-          };
-          wrappedExecute.__antigravityHooked = true;
-          gre.execute = wrappedExecute;
-        }
-
-        if (typeof gre.ready === 'function' && !gre.ready.__antigravityHooked) {
-          const origReady = gre.ready.bind(gre);
-          const wrappedReady = function (cb) {
-            return origReady(() => {
-              hookRecaptchaEnterprise();
-              if (typeof cb === 'function') cb();
-            });
-          };
-          wrappedReady.__antigravityHooked = true;
-          gre.ready = wrappedReady;
-        }
-      }
-    } catch {
-      // Ignore
-    }
-  }
-
   // Install fetch/XHR interceptors once per window
   if (!window.__ANTIGRAVITY_FLOW_INTERCEPTORS_INSTALLED__) {
     window.__ANTIGRAVITY_FLOW_INTERCEPTORS_INSTALLED__ = true;
 
     setInterval(() => {
-      hookRecaptchaEnterprise();
       scanWizGlobalData();
+      discoverRecaptchaSiteKey();
     }, 1500);
 
     window.fetch = async function (...args) {
-      hookRecaptchaEnterprise();
       scanWizGlobalData();
       detectProjectIdFromLocation();
 
@@ -886,7 +963,6 @@
       }
 
       const fullUrl = normalizeUrl(rawUrlStr);
-      // Always harvest f.sid, bl, and at token even from ignored telemetry RPCs (WuwhI / nzlxg)
       if (fullUrl.includes('batchexecute')) {
         getRpcIdFromUrl(fullUrl);
         harvestAtTokenFromRawBody(initBodyRaw);
@@ -1042,12 +1118,9 @@
   }
 
   // ============================================================================
-  // ACTIVE NON-DOM BATCHEXECUTE RPC ENGINE (maseQ, ogiZ0b, SPrCad, as29s, HTrJv)
+  // 3. ACTIVE NON-DOM BATCHEXECUTE RPC ENGINE (maseQ, ogiZ0b, SPrCad, as29s, HTrJv)
   // ============================================================================
 
-  /**
-   * Execute a Google Boq `batchexecute` RPC directly from the Flow page's MAIN world
-   */
   async function executeBatchRpc(rpcId, innerArgsArray, projectIdOverride = null) {
     scanWizGlobalData();
     const projectId = projectIdOverride || detectProjectIdFromLocation();
@@ -1061,14 +1134,15 @@
     const sourcePath = projectId ? `/project/${projectId}` : location.pathname || '/';
     const bl = bridgeState.wizBuildLabel || 'boq_labs-ai-sandbox-frontend_20261022.12_p0';
     const fSid = bridgeState.wizFSid || '';
-    const reqId = Math.floor(Math.random() * 800000) + 100000;
+    const reqId = Math.floor(Math.random() * 900000) + 100000;
+    const hl = document.documentElement.lang || navigator.language || 'zh-CN';
 
     const queryParams = new URLSearchParams();
     queryParams.set('rpcids', rpcId);
     queryParams.set('source-path', sourcePath);
     queryParams.set('bl', bl);
     if (fSid) queryParams.set('f.sid', fSid);
-    queryParams.set('hl', navigator.language || 'zh-CN');
+    queryParams.set('hl', hl);
     queryParams.set('_reqid', String(reqId));
     queryParams.set('rt', 'c');
 
@@ -1079,12 +1153,11 @@
     formBody.set('f.req', JSON.stringify(outerEnvelope));
     formBody.set('at', bridgeState.wizAtToken);
 
-    // Use window.fetch so our packet logger also records the automated RPC call in the Workbench table!
     const response = await window.fetch(endpointUrl, {
       method: 'POST',
       credentials: 'include',
       headers: {
-        'content-type': 'application/x-www-form-urlencoded;charset=utf-8',
+        'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
         'x-same-domain': '1'
       },
       body: formBody.toString()
@@ -1120,10 +1193,10 @@
 
   /**
    * Build the 11-element ClientContext array required by maseQ, ogiZ0b, and SPrCad:
-   * [null, 22, null, null, null, projectId, null, null, null, null, [recaptchaToken, 1]]
+   * Always uses `CAPTCHA_ACTION_IMAGE = "IMAGE_GENERATION"`!
    */
-  async function buildClientContext(projectId, actionHint) {
-    const recaptchaToken = await getFreshRecaptchaToken(actionHint);
+  async function buildClientContext(projectId) {
+    const recaptchaToken = await getFreshRecaptchaToken(CAPTCHA_ACTION_IMAGE);
     return [
       null,
       22,
@@ -1161,7 +1234,7 @@
     const mimeType = payload.mimeType || 'image/png';
     const fileName = payload.fileName || 'product.png';
 
-    const clientContext = await buildClientContext(projectId, 'UPLOAD_IMAGE');
+    const clientContext = await buildClientContext(projectId);
     const uuid1 = generateUpperUuid();
     const uuid2 = generateUpperUuid();
 
@@ -1191,6 +1264,52 @@
       throw new Error(`上传参考图 (maseQ) 未返回有效的 Media ID: ${JSON.stringify(parsedResult).slice(0, 200)}`);
     }
 
+    // Replicate Google Flow frontend post-upload registration sequence:
+    // 1. Sync project state via ngNC2 (also verifies projectId wasn't deleted)
+    try {
+      await executeBatchRpc('ngNC2', [`tools/PINHOLE/projects/${projectId}`], projectId);
+    } catch (ngErr) {
+      if (ngErr.rpcErrorCode === 5) {
+        const projErr = new Error(
+          `当前 Google Flow 项目 (${projectId}) 不存在或已被删除 (RPC [ngNC2] 返回 [5])。请在 Flow 页面新建或进入一个有效项目后再试！`
+        );
+        projErr.rpcErrorCode = 5;
+        projErr.isProjectDeleted = true;
+        throw projErr;
+      }
+    }
+
+    // 2. Poll as29s([uploadedMediaId]) to ensure the uploaded reference image is indexed & not tombstoned ([5])
+    let mediaReady = false;
+    let lastAs29sErr = null;
+    for (let poll = 0; poll < 4; poll++) {
+      try {
+        const as29sRes = await executeBatchRpc('as29s', [uploadedMediaId], projectId);
+        if (as29sRes && Array.isArray(as29sRes) && as29sRes[0] === uploadedMediaId) {
+          mediaReady = true;
+          break;
+        }
+      } catch (asErr) {
+        lastAs29sErr = asErr;
+        if (asErr.rpcErrorCode !== 5) {
+          break;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 750));
+    }
+
+    if (!mediaReady && lastAs29sErr && lastAs29sErr.rpcErrorCode === 5) {
+      const tombErr = new Error(
+        `参考图在当前 Flow 项目中命中已删除记录 (MediaID=${uploadedMediaId.slice(0, 8)}... 返回 [5] NOT_FOUND)`
+      );
+      tombErr.rpcErrorCode = 5;
+      tombErr.isTombstonedMedia = true;
+      throw tombErr;
+    }
+
+    // Brief settle delay so ogiZ0b backend workers see the indexed reference asset
+    await new Promise((r) => setTimeout(r, 400));
+
     const dimensions = parsedResult?.[0]?.[6]?.[2] || null;
     return {
       ok: true,
@@ -1201,42 +1320,23 @@
   }
 
   /**
-   * Resolve candidate model keys when the user selects Nano Banana 2.1 / 2 or another model
+   * Resolve wire model ID:
+   * - GEM_PIX_2: Nano Banana Pro
+   * - NARWHAL: Nano Banana 2 / 2.1
+   * - HARBOR_SEAL: Nano Banana Lite
+   * - GEM_PIX: Nano Banana
    */
-  function getCandidateModelKeys(requestedModel) {
-    if (!requestedModel || requestedModel === 'GEM_PIX_2') {
-      return ['GEM_PIX_2'];
+  function resolveWireImageModel(requestedModel) {
+    if (!requestedModel || requestedModel === 'GEM_PIX_2' || requestedModel === 'NANO_BANANA_PRO') {
+      return 'GEM_PIX_2';
     }
-
-    if (requestedModel === 'NANO_BANANA_2_AUTO') {
-      const candidates = [];
-      // 1. Check any model key observed in ogiZ0b traffic that isn't GEM_PIX_2
-      for (const obs of bridgeState.observedModels) {
-        if (obs && obs !== 'GEM_PIX_2' && !candidates.includes(obs)) {
-          candidates.push(obs);
-        }
-      }
-      // 2. Check HTrJv discovered models matching "Nano Banana 2" or "narwhal"
-      for (const dm of bridgeState.discoveredImageModels) {
-        const labelLower = `${dm.groupName} ${dm.displayName} ${dm.modelKey}`.toLowerCase();
-        if (
-          (labelLower.includes('banana 2') || labelLower.includes('narwhal')) &&
-          dm.modelKey !== 'narwhal_display' &&
-          !candidates.includes(dm.modelKey)
-        ) {
-          candidates.push(dm.modelKey);
-        }
-      }
-      // 3. Standard Google Flow internal keys for Nano Banana 2.1 / 2
-      for (const fallback of ['NARWHAL', 'GEM_PIX', 'narwhal_display']) {
-        if (!candidates.includes(fallback)) {
-          candidates.push(fallback);
-        }
-      }
-      return candidates;
+    if (requestedModel === 'NANO_BANANA_2_AUTO' || requestedModel === 'NANO_BANANA_2' || requestedModel === 'NARWHAL') {
+      return 'NARWHAL';
     }
-
-    return [requestedModel];
+    if (requestedModel === 'NANO_BANANA_LITE' || requestedModel === 'HARBOR_SEAL') {
+      return 'HARBOR_SEAL';
+    }
+    return requestedModel;
   }
 
   /**
@@ -1260,107 +1360,90 @@
     }
 
     const aspectRatioEnum = Number(payload.aspectRatioEnum) || 1;
-    const candidateModels = getCandidateModelKeys(payload.modelName);
+    const wireModelKey = resolveWireImageModel(payload.modelName);
 
-    let lastError = null;
-    for (const modelKey of candidateModels) {
-      try {
-        const clientContext = await buildClientContext(projectId, 'GENERATE_IMAGES');
-        const seed =
-          typeof payload.seed === 'number' && payload.seed > 0
-            ? payload.seed
-            : Math.floor(Math.random() * 2147483646) + 1;
-        const reqUuid1 = generateUpperUuid();
-        const reqUuid2 = generateUpperUuid();
-        const batchUuid = generateUpperUuid();
+    const clientContext = await buildClientContext(projectId);
+    const seed =
+      typeof payload.seed === 'number' && payload.seed > 0
+        ? payload.seed
+        : Math.floor(Math.random() * 1000000000) + 1;
+    const reqUuid1 = generateUpperUuid();
+    const reqUuid2 = generateUpperUuid();
+    const batchUuid = generateUpperUuid();
 
-        const ogiZ0bArgs = [
+    const ogiZ0bArgs = [
+      null,
+      [
+        [
+          null,
           null,
           [
             [
-              null,
-              null,
-              [
-                [
-                  uploadedMediaId,
-                  null,
-                  null,
-                  null,
-                  1
-                ]
-              ],
-              seed,
-              aspectRatioEnum,
-              modelKey,
-              null,
-              clientContext,
-              [
-                [
-                  [
-                    promptText
-                  ]
-                ]
-              ],
+              uploadedMediaId,
               null,
               null,
               null,
-              reqUuid1,
-              reqUuid2
+              1
             ]
           ],
-          1,
+          seed,
+          aspectRatioEnum,
+          wireModelKey,
+          null,
           clientContext,
           [
-            batchUuid
-          ]
-        ];
+            [
+              [
+                promptText
+              ]
+            ]
+          ],
+          null,
+          null,
+          null,
+          reqUuid1,
+          reqUuid2
+        ]
+      ],
+      1,
+      clientContext,
+      [
+        batchUuid
+      ]
+    ];
 
-        const parsedResult = await executeBatchRpc('ogiZ0b', ogiZ0bArgs, projectId);
-        const firstGenItem = parsedResult?.[0]?.[0];
-        const generatedMediaId = firstGenItem?.[0];
-        const workflowId = firstGenItem?.[2] || parsedResult?.[1]?.[0]?.[0] || null;
-        const signedUrl1K =
-          firstGenItem?.[6]?.[0]?.[13] ||
-          firstGenItem?.[6]?.[5]?.[1] ||
-          null;
-        const dimensions = firstGenItem?.[6]?.[2] || [1024, 1024];
+    const parsedResult = await executeBatchRpc('ogiZ0b', ogiZ0bArgs, projectId);
+    const firstGenItem = parsedResult?.[0]?.[0];
+    const generatedMediaId = firstGenItem?.[0];
+    const workflowId = firstGenItem?.[2] || parsedResult?.[1]?.[0]?.[0] || null;
+    const signedUrl1K =
+      firstGenItem?.[6]?.[0]?.[13] ||
+      firstGenItem?.[6]?.[5]?.[1] ||
+      null;
+    const dimensions = firstGenItem?.[6]?.[2] || [1024, 1024];
 
-        if (!generatedMediaId || typeof generatedMediaId !== 'string') {
-          throw new Error(
-            `图生图 (ogiZ0b, model=${modelKey}) 未返回有效的生成图像 ID: ${JSON.stringify(parsedResult).slice(
-              0,
-              200
-            )}`
-          );
-        }
-
-        return {
-          ok: true,
-          generatedMediaId,
-          workflowId,
-          signedUrl1K,
-          dimensions,
-          seedUsed: seed,
-          modelUsed: modelKey
-        };
-      } catch (err) {
-        lastError = err;
-        // If we have more candidate model keys and this failed due to invalid model key (error code 3 = INVALID_ARGUMENT), try next candidate
-        if (candidateModels.length > 1) {
-          console.warn(
-            `[FlowAutomator Bridge] Model key ${modelKey} returned error (${err.message}), trying next candidate...`
-          );
-          continue;
-        }
-        throw err;
-      }
+    if (!generatedMediaId || typeof generatedMediaId !== 'string') {
+      throw new Error(
+        `图生图 (ogiZ0b, model=${wireModelKey}) 未返回有效的生成图像 ID: ${JSON.stringify(parsedResult).slice(
+          0,
+          200
+        )}`
+      );
     }
 
-    throw lastError || new Error('图生图请求失败');
+    return {
+      ok: true,
+      generatedMediaId,
+      workflowId,
+      signedUrl1K,
+      dimensions,
+      seedUsed: seed,
+      modelUsed: wireModelKey
+    };
   }
 
   /**
-   * Step 3 (2K): Upscale Generated Image (`rpcids=SPrCad`)
+   * Step 3 (2K / 4K): Upscale Generated Image (`rpcids=SPrCad`)
    */
   async function handleUpscaleImage(payload) {
     const projectId = payload.projectId || detectProjectIdFromLocation();
@@ -1373,8 +1456,8 @@
       throw new Error('超分放大 (SPrCad) 缺少生成的图像 ID (generatedMediaId)');
     }
 
-    const resolutionEnum = Number(payload.resolutionEnum) || 1; // 1 = 2K
-    const clientContext = await buildClientContext(projectId, 'UPSCALE_IMAGE');
+    const resolutionEnum = Number(payload.resolutionEnum) || 1; // 1 = 2K, 2 = 4K
+    const clientContext = await buildClientContext(projectId);
 
     const sPrCadArgs = [generatedMediaId, resolutionEnum, clientContext];
     const parsedResult = await executeBatchRpc('SPrCad', sPrCadArgs, projectId);
@@ -1388,7 +1471,7 @@
 
     if (!base64Jpeg && !signedUrlUpscaled) {
       throw new Error(
-        `2K 超分放大 (SPrCad) 未返回图像 Base64 或下载链接: ${JSON.stringify(parsedResult).slice(0, 200)}`
+        `超分放大 (SPrCad) 未返回图像 Base64 或下载链接: ${JSON.stringify(parsedResult).slice(0, 200)}`
       );
     }
 
@@ -1401,9 +1484,6 @@
     };
   }
 
-  /**
-   * Fetch fresh signed URL via `rpcids=as29s` if needed, or fetch image bytes and return as Base64
-   */
   async function handleFetchMediaAsBase64(payload) {
     let targetUrl = payload.signedUrl;
     const mediaId = payload.mediaId;
@@ -1449,9 +1529,6 @@
     };
   }
 
-  /**
-   * Actively fetch `HTrJv` catalog from Google Flow
-   */
   async function handleFetchFlowCatalog() {
     scanWizGlobalData();
     const projectId = detectProjectIdFromLocation();
@@ -1464,9 +1541,6 @@
     };
   }
 
-  /**
-   * Hot-upgradable command dispatcher for messages from isolated-relay.js
-   */
   window.__ANTIGRAVITY_FLOW_BRIDGE_COMMAND_HANDLER__ = async function (command, payload = {}) {
     scanWizGlobalData();
     discoverRecaptchaSiteKey();
@@ -1475,11 +1549,24 @@
       const detectedProjectId = detectProjectIdFromLocation();
       const hasWizAuth = Boolean(bridgeState.wizAtToken || bridgeState.wizFSid);
 
-      // Non-blocking background catalog fetch if we have auth token and haven't fetched HTrJv yet
-      if (bridgeState.wizAtToken && !bridgeState.catalogFetched) {
-        bridgeState.catalogFetched = true;
-        handleFetchFlowCatalog().catch(() => {});
+      // Check x2a status on current window.grecaptcha
+      try {
+        const execFn = window.grecaptcha?.enterprise?.execute;
+        if (typeof execFn === 'function') {
+          const fnStr = Function.prototype.toString.call(execFn);
+          if (fnStr.includes('extension_hijack_detected')) {
+            bridgeState.x2aTrapDetected = true;
+          } else if (!bridgeState.pristineExecute) {
+            savePristineExecute(execFn, window.grecaptcha.enterprise, 'status-check');
+          }
+        }
+      } catch {
+        // Ignore
       }
+
+      const bypassMode = bridgeState.pristineExecute
+        ? `Pristine 原生直连 (${bridgeState.captureSource})`
+        : 'Object.assign 净化绕过 (已免疫 x2a 陷阱)';
 
       return {
         ok: true,
@@ -1488,9 +1575,11 @@
         projectId: detectedProjectId,
         sessionId: bridgeState.wizFSid,
         wizBuildLabel: bridgeState.wizBuildLabel,
-        recaptchaReady: Boolean(window.grecaptcha?.enterprise || window.grecaptcha),
+        recaptchaReady: Boolean(window.grecaptcha?.enterprise || bridgeState.pristineExecute),
         recaptchaSiteKey: bridgeState.lastSiteKey,
-        recaptchaAction: bridgeState.lastAction,
+        recaptchaAction: CAPTCHA_ACTION_IMAGE,
+        recaptchaBypassMode: bypassMode,
+        x2aTrapDetected: bridgeState.x2aTrapDetected,
         observedRpcIds: bridgeState.observedRpcIds,
         observedModels: bridgeState.observedModels,
         observedAspectRatios: bridgeState.observedAspectRatios,
@@ -1530,7 +1619,6 @@
     return { ok: false, error: `Unsupported bridge command: ${command}` };
   };
 
-  // Register window message listener once, delegating to the hot-upgradable command handler
   if (!window.__ANTIGRAVITY_FLOW_COMMAND_LISTENER_INSTALLED__) {
     window.__ANTIGRAVITY_FLOW_COMMAND_LISTENER_INSTALLED__ = true;
 
@@ -1562,7 +1650,9 @@
             payload: {
               ok: false,
               error: err.message || String(err),
-              rpcErrorCode: err.rpcErrorCode || null
+              rpcErrorCode: err.rpcErrorCode || null,
+              isProjectDeleted: Boolean(err.isProjectDeleted),
+              isTombstonedMedia: Boolean(err.isTombstonedMedia)
             }
           },
           '*'

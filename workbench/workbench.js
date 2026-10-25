@@ -20,8 +20,9 @@ No plastic skin or artificial smoothing. Keep all original product shapes, color
 
 const VALID_IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp'];
 const IDB_NAME = 'FlowAutomatorDB';
-const IDB_VERSION = 1;
+const IDB_VERSION = 2;
 const IDB_STORE_TASKS = 'tasks';
+const IDB_STORE_HANDLES = 'handles';
 
 const appState = {
   inputDirHandle: null,
@@ -134,10 +135,68 @@ function openTaskDb() {
       if (!db.objectStoreNames.contains(IDB_STORE_TASKS)) {
         db.createObjectStore(IDB_STORE_TASKS, { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains(IDB_STORE_HANDLES)) {
+        db.createObjectStore(IDB_STORE_HANDLES, { keyPath: 'key' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+}
+
+async function saveDirHandleToDb(key, handle) {
+  try {
+    const db = await openTaskDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE_HANDLES, 'readwrite');
+      tx.objectStore(IDB_STORE_HANDLES).put({ key, handle });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  } catch (err) {
+    console.warn('[Workbench IDB] Failed to save directory handle:', err);
+  }
+}
+
+async function restoreDirHandlesFromDb() {
+  try {
+    const db = await openTaskDb();
+    const records = await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE_HANDLES, 'readonly');
+      const req = tx.objectStore(IDB_STORE_HANDLES).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    for (const rec of records) {
+      if (rec.key === 'outputDirHandle' && rec.handle) {
+        appState.outputDirHandle = rec.handle;
+      } else if (rec.key === 'inputDirHandle' && rec.handle) {
+        appState.inputDirHandle = rec.handle;
+      }
+    }
+  } catch (err) {
+    console.warn('[Workbench IDB] Failed to restore directory handles:', err);
+  }
+}
+
+async function ensureOutputDirPermission() {
+  if (!appState.outputDirHandle) return false;
+  try {
+    if (typeof appState.outputDirHandle.queryPermission === 'function') {
+      let perm = await appState.outputDirHandle.queryPermission({ mode: 'readwrite' });
+      if (perm === 'granted') return true;
+      if (typeof appState.outputDirHandle.requestPermission === 'function') {
+        perm = await appState.outputDirHandle.requestPermission({ mode: 'readwrite' });
+        return perm === 'granted';
+      }
+    }
+    return true;
+  } catch (err) {
+    console.warn('[Workbench Save] Output directory permission check failed:', err);
+    return false;
+  }
 }
 
 async function saveTaskToDb(task, orderIndex = 0) {
@@ -301,7 +360,13 @@ async function checkFlowConnection() {
     }
 
     if (bs.recaptchaSiteKey) {
-      diagRecaptcha.textContent = `已就绪 (SiteKey: ${bs.recaptchaSiteKey.slice(0, 14)}...)`;
+      const bypassBadge =
+        bs.recaptchaBypassMode === 'PRISTINE_CAPTURED'
+          ? ' [Pristine 原生直连]'
+          : bs.recaptchaBypassMode === 'ASSIGN_NEUTER_ACTIVE'
+            ? ' [Object.assign 净化绕过已激活]'
+            : '';
+      diagRecaptcha.textContent = `已就绪 (SiteKey: ${bs.recaptchaSiteKey.slice(0, 14)}...)${bypassBadge}`;
     } else if (bs.recaptchaReady) {
       diagRecaptcha.textContent = 'grecaptcha.enterprise 已加载并就绪';
     } else {
@@ -381,7 +446,8 @@ function renderProtocolSummary() {
 
   const modelsSet = new Set([
     'GEM_PIX_2 (Nano Banana Pro)',
-    'NANO_BANANA_2',
+    'NARWHAL (Nano Banana 2.1)',
+    'HARBOR_SEAL (Nano Banana Lite)',
     ...(s.observedModels || [])
   ]);
   sumModels.textContent = Array.from(modelsSet).join(', ');
@@ -792,6 +858,63 @@ function blobToBase64(blob) {
   });
 }
 
+/**
+ * Prevents Google Flow `maseQ` content-hash tombstone collisions (`[5] NOT_FOUND`) when
+ * a user deletes previously uploaded images in the Flow project webpage and re-runs the same files.
+ * Draws the image at 100% original resolution and flips the least-significant bit (±1/255, visually imperceptible)
+ * of 3 random corner/edge pixels so every upload produces a brand-new SHA-256 byte & pixel hash.
+ */
+async function blobToUniqueUploadBase64(blob, origMimeType = 'image/jpeg', origFileName = 'product.jpg', forcePng = false) {
+  try {
+    const bmp = await createImageBitmap(blob);
+    const width = bmp.width;
+    const height = bmp.height;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close();
+
+    // Flip LSB (^ 1) on 3 random pixels so both pixel-hash and file-byte-hash are 100% unique
+    const coords = [
+      [Math.floor(Math.random() * Math.min(8, width)), Math.floor(Math.random() * Math.min(8, height))],
+      [Math.max(0, width - 1 - Math.floor(Math.random() * Math.min(8, width))), Math.floor(Math.random() * Math.min(8, height))],
+      [Math.floor(Math.random() * width), Math.max(0, height - 1 - Math.floor(Math.random() * Math.min(8, height)))]
+    ];
+
+    for (const [px, py] of coords) {
+      const imgData = ctx.getImageData(px, py, 1, 1);
+      imgData.data[0] = imgData.data[0] ^ 1;
+      imgData.data[1] = imgData.data[1] ^ (Math.random() > 0.5 ? 1 : 0);
+      imgData.data[2] = imgData.data[2] ^ 1;
+      ctx.putImageData(imgData, px, py);
+    }
+
+    const usePng = forcePng || origMimeType === 'image/png' || origMimeType === 'image/webp';
+    const targetMime = usePng ? 'image/png' : 'image/jpeg';
+    const dataUrl = usePng ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.98);
+    const commaIdx = dataUrl.indexOf(',');
+    const base64Data = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+
+    const baseName = origFileName.replace(/\.[^.]+$/, '');
+    const ext = usePng ? 'png' : 'jpg';
+    const randSuffix = Math.random().toString(36).slice(2, 6);
+    return {
+      base64Data,
+      mimeType: targetMime,
+      uploadFileName: `${baseName}_${randSuffix}.${ext}`
+    };
+  } catch (err) {
+    console.warn('[Workbench Upload] Canvas hash uniquification fallback to raw blob:', err);
+    return {
+      base64Data: await blobToBase64(blob),
+      mimeType: origMimeType || 'image/png',
+      uploadFileName: origFileName
+    };
+  }
+}
+
 function base64ToBlob(base64Str, mimeType = 'image/jpeg') {
   const clean = base64Str.includes(',') ? base64Str.split(',')[1] : base64Str;
   const binStr = atob(clean);
@@ -883,42 +1006,79 @@ async function executeSingleTaskPipeline(task, taskIndex) {
     throw new Error('统一图像增强提示词不能为空');
   }
 
-  // Step 1: Upload Reference Image (maseQ)
+  // Step 1: Upload Reference Image (maseQ + ngNC2 + as29s readiness check)
   task.status = 'UPLOADING';
   task.errorMsg = null;
-  queueLiveStepText.textContent = `[${taskIndex + 1}/${appState.tasks.length}] 正在上传参考原图: ${task.name} (maseQ)...`;
+  queueLiveStepText.textContent = `[${taskIndex + 1}/${appState.tasks.length}] 正在上传并校验参考原图: ${task.name} (maseQ)...`;
   renderTaskList();
   await saveTaskToDb(task, taskIndex);
 
-  const sourceBase64 = await blobToBase64(task.sourceBlob);
-  const uploadRes = await sendFlowCommand('EXECUTE_UPLOAD_IMAGE', {
-    base64Data: sourceBase64,
-    mimeType: task.mimeType || 'image/png',
-    fileName: task.name
+  const uniqueUpload = await blobToUniqueUploadBase64(
+    task.sourceBlob,
+    task.mimeType || 'image/jpeg',
+    task.name,
+    false
+  );
+  let uploadRes = await sendFlowCommand('EXECUTE_UPLOAD_IMAGE', {
+    base64Data: uniqueUpload.base64Data,
+    mimeType: uniqueUpload.mimeType,
+    fileName: uniqueUpload.uploadFileName
   });
 
-  const uploadedMediaId = uploadRes.uploadedMediaId;
+  let uploadedMediaId = uploadRes.uploadedMediaId;
   task.uploadedMediaId = uploadedMediaId;
 
   if (appState.cancelRequested) {
     throw new Error('任务已被用户取消');
   }
 
-  // Step 2: Image-to-Image Generation (ogiZ0b)
+  // Step 2: Image-to-Image Generation (ogiZ0b) with automatic [5] NOT_FOUND recovery
   task.status = 'GENERATING';
-  queueLiveStepText.textContent = `[${taskIndex + 1}/${appState.tasks.length}] 原图已上传 (${uploadedMediaId.slice(
+  queueLiveStepText.textContent = `[${taskIndex + 1}/${appState.tasks.length}] 原图已就绪 (${uploadedMediaId.slice(
     0,
     8
   )}...)，正在调用 ${selectedModelVal} 执行图生图 (ogiZ0b)...`;
   renderTaskList();
   await saveTaskToDb(task, taskIndex);
 
-  const genRes = await sendFlowCommand('EXECUTE_GENERATE_IMAGE', {
-    uploadedMediaId,
-    prompt: promptText,
-    modelName: selectedModelVal,
-    aspectRatioEnum: selectedAspectEnum
-  });
+  let genRes = null;
+  try {
+    genRes = await sendFlowCommand('EXECUTE_GENERATE_IMAGE', {
+      uploadedMediaId,
+      prompt: promptText,
+      modelName: selectedModelVal,
+      aspectRatioEnum: selectedAspectEnum
+    });
+  } catch (genErr) {
+    const isNotFoundErr =
+      genErr.rpcErrorCode === 5 || (genErr.message && genErr.message.includes('返回服务端错误码: [5]'));
+    if (isNotFoundErr && !appState.cancelRequested) {
+      queueLiveStepText.textContent = `[${taskIndex + 1}/${appState.tasks.length}] 检测到参考图缓存索引同步延迟 ([5])，正在重新生成无损指纹并重传原图...`;
+      await sleepMs(1500);
+      const retryUploadPayload = await blobToUniqueUploadBase64(
+        task.sourceBlob,
+        task.mimeType || 'image/png',
+        task.name,
+        true
+      );
+      uploadRes = await sendFlowCommand('EXECUTE_UPLOAD_IMAGE', {
+        base64Data: retryUploadPayload.base64Data,
+        mimeType: retryUploadPayload.mimeType,
+        fileName: retryUploadPayload.uploadFileName
+      });
+      uploadedMediaId = uploadRes.uploadedMediaId;
+      task.uploadedMediaId = uploadedMediaId;
+
+      genRes = await sendFlowCommand('EXECUTE_GENERATE_IMAGE', {
+        uploadedMediaId,
+        prompt: promptText,
+        modelName: selectedModelVal,
+        aspectRatioEnum: selectedAspectEnum
+      });
+    } else {
+      throw genErr;
+    }
+  }
 
   const generatedMediaId = genRes.generatedMediaId;
   task.generatedMediaId = generatedMediaId;
@@ -930,22 +1090,23 @@ async function executeSingleTaskPipeline(task, taskIndex) {
     throw new Error('任务已被用户取消');
   }
 
-  // Step 3: Resolution Output (2K Upscale via SPrCad OR 1K Direct Download)
+  // Step 3: Resolution Output (2K / 4K Upscale via SPrCad OR 1K Direct Download)
   let finalBase64 = null;
   let finalMimeType = 'image/jpeg';
 
-  if (selectedResolutionVal === '2K') {
+  if (selectedResolutionVal === '2K' || selectedResolutionVal === '4K') {
+    const upscaleEnum = selectedResolutionVal === '4K' ? 2 : 1;
     task.status = 'UPSCALING';
     queueLiveStepText.textContent = `[${taskIndex + 1}/${appState.tasks.length}] 1K 生成完成 (${generatedMediaId.slice(
       0,
       8
-    )}...)，正在执行 2K 超分放大导出 (SPrCad)...`;
+    )}...)，正在执行 ${selectedResolutionVal} 超分放大导出 (SPrCad)...`;
     renderTaskList();
     await saveTaskToDb(task, taskIndex);
 
     const upscaleRes = await sendFlowCommand('EXECUTE_UPSCALE_IMAGE', {
       generatedMediaId,
-      resolutionEnum: 1
+      resolutionEnum: upscaleEnum
     });
 
     task.upscaledMediaId = upscaleRes.upscaledMediaId || null;
@@ -1023,6 +1184,7 @@ function sleepMs(ms) {
 }
 
 async function runSingleTaskStandalone(task) {
+  await ensureOutputDirPermission();
   const bs = await checkFlowConnection();
   if (!bs || !bs.projectId) {
     alert('请先在 Chrome 中打开 Google Flow 并进入一个具体项目 (/project/...) 页面后再开始执行！');
@@ -1051,6 +1213,7 @@ async function runSingleTaskStandalone(task) {
 async function startQueueLoop({ sampleLimit = null } = {}) {
   if (appState.queueStatus === 'RUNNING') return;
 
+  await ensureOutputDirPermission();
   const bs = await checkFlowConnection();
   if (!bs || !bs.projectId) {
     alert(
@@ -1100,8 +1263,12 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
     while (attempt <= maxRetries && !taskSucceeded) {
       try {
         if (attempt > 0) {
-          const backoffMs = Math.min(3000 * Math.pow(2, attempt - 1), 12000);
-          queueLiveStepText.textContent = `[${task.name}] 第 ${attempt} 次自动重试前等待 ${(
+          const isUnusualActivity =
+            task.errorMsg && task.errorMsg.includes('PUBLIC_ERROR_UNUSUAL_ACTIVITY');
+          const backoffMs = isUnusualActivity
+            ? 20000
+            : Math.min(3000 * Math.pow(2, attempt - 1), 12000);
+          queueLiveStepText.textContent = `[${task.name}] 第 ${attempt} 次自动重试前冷却等待 ${(
             backoffMs / 1000
           ).toFixed(1)} 秒...`;
           await sleepMs(backoffMs);
@@ -1113,6 +1280,7 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
       } catch (err) {
         attempt++;
         const msg = err.message || String(err);
+        task.errorMsg = msg;
 
         // If user cancelled or fatal auth/quota error, do not retry blindly
         if (
@@ -1188,12 +1356,15 @@ async function initWorkbench() {
   ]);
 
   promptTextarea.value = userPrompt || DEFAULT_ECOMMERCE_PROMPT;
-  if (selectedModel) selectModel.value = selectedModel;
+  if (selectedModel) {
+    selectModel.value = selectedModel === 'NANO_BANANA_2_AUTO' ? 'NARWHAL' : selectedModel;
+  }
   if (selectedResolution) selectResolution.value = selectedResolution;
   if (selectedAspect) selectAspect.value = selectedAspect;
   if (selectedDelay) selectDelay.value = selectedDelay;
   if (selectedMaxRetries !== undefined) selectMaxRetries.value = selectedMaxRetries;
 
+  await restoreDirHandlesFromDb();
   await restoreTasksFromDb();
   renderTaskList();
   updateDirStatusBanner();
@@ -1348,6 +1519,7 @@ async function initWorkbench() {
     try {
       const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
       appState.inputDirHandle = dirHandle;
+      await saveDirHandleToDb('inputDirHandle', dirHandle);
       const files = [];
       for await (const entry of dirHandle.values()) {
         if (entry.kind === 'file' && isSupportedImageFile(entry.name)) {
@@ -1370,7 +1542,10 @@ async function initWorkbench() {
 
   fileInputFallback.addEventListener('change', async (e) => {
     if (e.target.files?.length > 0) {
-      await addFilesToTaskList(Array.from(e.target.files));
+      const sortedFiles = Array.from(e.target.files).sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { numeric: true })
+      );
+      await addFilesToTaskList(sortedFiles);
       fileInputFallback.value = '';
     }
   });
@@ -1383,6 +1558,7 @@ async function initWorkbench() {
     try {
       const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
       appState.outputDirHandle = dirHandle;
+      await saveDirHandleToDb('outputDirHandle', dirHandle);
       updateDirStatusBanner();
     } catch (err) {
       if (err.name !== 'AbortError') {
