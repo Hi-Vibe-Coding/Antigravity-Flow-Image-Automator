@@ -393,6 +393,252 @@ body {
   cursor: pointer;
 }
 
+/* 导入方式互斥下拉框 */
+.import-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-color);
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.import-mode-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.select-import-mode {
+  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  background-color: var(--bg-card);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.select-import-mode:focus {
+  border-color: var(--brand-primary);
+}
+
+.select-import-mode:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background-color: var(--bg-subtle);
+}
+
+/* 文件夹待扫描暂存区域 */
+.folder-staging-area {
+  border: 2px dashed var(--border-color);
+  border-radius: 8px;
+  min-height: 240px;
+  max-height: 380px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background-color: var(--bg-card);
+  position: relative;
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.drop-zone-panel.is-dragover .folder-staging-area,
+.folder-staging-area.is-dragover {
+  border-color: var(--brand-primary);
+  background-color: rgba(59, 130, 246, 0.08);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.16);
+}
+
+.folder-empty-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 28px 16px;
+  margin: auto;
+}
+
+.drop-empty-icon {
+  font-size: 42px;
+  margin-bottom: 10px;
+  user-select: none;
+}
+
+.folder-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.folder-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.folder-card:hover {
+  border-color: var(--brand-primary);
+  transform: translateY(-1px);
+}
+
+.folder-card-icon {
+  font-size: 24px;
+  line-height: 1;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.folder-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.folder-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-card-badge {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.folder-card-remove {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.folder-card-remove:hover {
+  color: #ef4444;
+  background-color: rgba(239, 68, 68, 0.12);
+}
+
+/* 待扫描区域底部操作栏 */
+.folder-staging-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+  margin-top: auto;
+}
+
+.staged-count-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.btn-confirm-scan {
+  padding: 8px 22px;
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.25);
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.btn-confirm-scan:hover:not(:disabled) {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(16, 185, 129, 0.35);
+}
+
+.btn-confirm-scan:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--bg-subtle) !important;
+  color: var(--text-muted) !important;
+  border-color: var(--border-color) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+/* 扫描进度条容器 */
+.scan-progress-wrap {
+  margin: 10px 0;
+  padding: 12px 14px;
+  background-color: var(--bg-subtle);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.scan-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.scan-progress-text {
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80%;
+}
+
+.scan-progress-pct {
+  font-weight: 700;
+  color: var(--brand-primary);
+}
+
+.scan-progress-bar-bg {
+  width: 100%;
+  height: 8px;
+  background-color: var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.scan-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6 0%, #10b981 100%);
+  border-radius: 4px;
+  transition: width 0.2s ease;
+}
+
 .helper-banner {
   font-size: 12px;
   padding: 8px 12px;
@@ -701,9 +947,107 @@ dialog::backdrop {
   transition: width 0.25s ease;
 }
 
+.queue-live-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-action-log {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-main);
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.btn-action-log:hover {
+  border-color: var(--brand-primary);
+  color: var(--brand-primary);
+  background-color: rgba(59, 130, 246, 0.08);
+  transform: translateY(-1px);
+}
+
+.btn-action-log-badge {
+  background-color: var(--brand-primary);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  min-width: 16px;
+  text-align: center;
+  line-height: 1.2;
+}
+
 .queue-live-text {
   font-size: 12px;
   color: var(--text-muted);
+  flex: 1;
+  min-width: 200px;
+}
+
+.queue-right-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+/* 队列进行中实时计时器 */
+.queue-timer-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 11px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+  user-select: none;
+}
+
+.timer-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--text-muted);
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.queue-timer-box.is-running {
+  border-color: #10b981;
+  color: #10b981;
+  background-color: rgba(16, 185, 129, 0.08);
+}
+
+.queue-timer-box.is-running .timer-dot {
+  background-color: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.8);
+}
+
+.queue-timer-box.is-paused {
+  border-color: #f59e0b;
+  color: #f59e0b;
+  background-color: rgba(245, 158, 11, 0.08);
+}
+
+.queue-timer-box.is-paused .timer-dot {
+  background-color: #f59e0b;
 }
 
 .queue-buttons {
@@ -1053,4 +1397,137 @@ dialog::backdrop {
   font-size: 18px;
   font-weight: 700;
   color: var(--brand-primary);
+}
+
+/* 关键操作行为记录面板 */
+.action-log-dialog {
+  width: 780px;
+  max-width: 95vw;
+}
+
+.log-dialog-inner {
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dialog-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.action-log-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-top: 10px;
+}
+
+.action-log-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  transition: border-color 0.15s ease;
+}
+
+.action-log-item:hover {
+  border-color: var(--brand-primary);
+}
+
+.action-log-time {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.action-log-pill {
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.action-log-pill.cat-IMPORT {
+  background-color: rgba(59, 130, 246, 0.14);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+}
+
+.action-log-pill.cat-SCAN {
+  background-color: rgba(139, 92, 246, 0.14);
+  color: #8b5cf6;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+}
+
+.action-log-pill.cat-QUEUE {
+  background-color: rgba(245, 158, 11, 0.14);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.action-log-pill.cat-PROCESS {
+  background-color: rgba(6, 182, 212, 0.14);
+  color: #06b6d4;
+  border: 1px solid rgba(6, 182, 212, 0.25);
+}
+
+.action-log-pill.cat-COMPLETE {
+  background-color: rgba(16, 185, 129, 0.14);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.action-log-pill.cat-ERROR {
+  background-color: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.action-log-pill.cat-CLEAR {
+  background-color: rgba(107, 114, 128, 0.14);
+  color: #9ca3af;
+  border: 1px solid rgba(107, 114, 128, 0.25);
+}
+
+.action-log-title {
+  font-weight: 600;
+  color: var(--text-main);
+  flex-shrink: 0;
+}
+
+.action-log-detail {
+  color: var(--text-muted);
+  word-break: break-all;
+  flex: 1;
+}
+
+.action-log-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 36px 16px;
+  font-size: 13px;
 }

@@ -56,6 +56,10 @@ const statCompleted = document.getElementById('statCompleted');
 const statFailed = document.getElementById('statFailed');
 const queueProgressFill = document.getElementById('queueProgressFill');
 const queueLiveStepText = document.getElementById('queueLiveStepText');
+const btnOpenActionLog = document.getElementById('btnOpenActionLog');
+const actionLogBadge = document.getElementById('actionLogBadge');
+const queueTimerBox = document.getElementById('queueTimerBox');
+const queueTimerText = document.getElementById('queueTimerText');
 
 const selectSampleCount = document.getElementById('selectSampleCount');
 const btnRunSample = document.getElementById('btnRunSample');
@@ -67,6 +71,7 @@ const btnRetryFailed = document.getElementById('btnRetryFailed');
 const btnExportTaskLog = document.getElementById('btnExportTaskLog');
 
 const imageDropZone = document.getElementById('imageDropZone');
+const selectImportMode = document.getElementById('selectImportMode');
 const btnPickInputDir = document.getElementById('btnPickInputDir');
 const btnPickFiles = document.getElementById('btnPickFiles');
 const btnPasteClipboard = document.getElementById('btnPasteClipboard');
@@ -77,7 +82,20 @@ const chkOverwriteOriginal = document.getElementById('chkOverwriteOriginal');
 const chkNumericNameOnly = document.getElementById('chkNumericNameOnly');
 const fileInputFallback = document.getElementById('fileInputFallback');
 const dirStatusText = document.getElementById('dirStatusText');
+
+const folderStagingArea = document.getElementById('folderStagingArea');
+const folderEmptyPrompt = document.getElementById('folderEmptyPrompt');
+const folderCardsContainer = document.getElementById('folderCardsContainer');
+const scanProgressWrap = document.getElementById('scanProgressWrap');
+const scanProgressText = document.getElementById('scanProgressText');
+const scanProgressPct = document.getElementById('scanProgressPct');
+const scanProgressBar = document.getElementById('scanProgressBar');
+const stagedFolderCountHint = document.getElementById('stagedFolderCountHint');
+const btnConfirmScanFolders = document.getElementById('btnConfirmScanFolders');
+
 const imageTaskList = document.getElementById('imageTaskList');
+
+let stagedFolders = []; // Array of { id, name, handle, entry }
 
 const promptTextarea = document.getElementById('promptTextarea');
 const btnPresetEcommerce = document.getElementById('btnPresetEcommerce');
@@ -121,8 +139,15 @@ const completionMainText = document.getElementById('completionMainText');
 const completionTotalTime = document.getElementById('completionTotalTime');
 const completionAvgTime = document.getElementById('completionAvgTime');
 
+const actionLogDialog = document.getElementById('actionLogDialog');
+const actionLogTotalCount = document.getElementById('actionLogTotalCount');
+const actionLogList = document.getElementById('actionLogList');
+const btnCopyActionLog = document.getElementById('btnCopyActionLog');
+const btnClearActionLog = document.getElementById('btnClearActionLog');
+const actionLogFeedback = document.getElementById('actionLogFeedback');
+
 // Mandatory fallback for browsers without <dialog closedby="any"> support
-for (const dlg of [reportDialog, previewDialog, completionDialog]) {
+for (const dlg of [reportDialog, previewDialog, completionDialog, actionLogDialog]) {
   if (dlg && !('closedBy' in HTMLDialogElement.prototype)) {
     dlg.addEventListener('click', (event) => {
       if (event.target !== dlg) return;
@@ -136,6 +161,227 @@ for (const dlg of [reportDialog, previewDialog, completionDialog]) {
       dlg.close();
     });
   }
+}
+
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Formats milliseconds into Chinese duration string, e.g.:
+ * - 1小时15分19秒
+ * - 45分19秒
+ * - 49秒
+ */
+function formatDurationChinese(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}小时${minutes}分${seconds}秒`;
+  }
+  if (minutes > 0) {
+    return `${minutes}分${seconds}秒`;
+  }
+  return `${seconds}秒`;
+}
+
+// ============================================================================
+// 0. ACTION AUDIT LOG SYSTEM & QUEUE TIMER
+// ============================================================================
+
+let actionLogs = [];
+let actionLogSaveTimer = null;
+
+const CATEGORY_NAMES = {
+  IMPORT: '导入',
+  SCAN: '扫描',
+  QUEUE: '队列',
+  PROCESS: '处理',
+  COMPLETE: '完成',
+  ERROR: '失败',
+  CLEAR: '清空'
+};
+
+function formatActionTimestamp(dateOrTs) {
+  const d = dateOrTs instanceof Date ? dateOrTs : new Date(dateOrTs || Date.now());
+  const pad = (n) => String(n).padStart(2, '0');
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  const day = d.getDate();
+  const hours = pad(d.getHours());
+  const minutes = pad(d.getMinutes());
+  const seconds = pad(d.getSeconds());
+  return `${year}年${month}月${day}日 ${hours}:${minutes}:${seconds}`;
+}
+
+function logAction(category, title, detail = '') {
+  const now = new Date();
+  const timeStr = formatActionTimestamp(now);
+  const entry = {
+    id: `act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    timestamp: Date.now(),
+    timeStr,
+    category,
+    title,
+    detail
+  };
+  actionLogs.unshift(entry);
+  if (actionLogs.length > 300) {
+    actionLogs.length = 300;
+  }
+  renderActionLogBadge();
+  if (actionLogDialog && actionLogDialog.open) {
+    renderActionLogList();
+  }
+  scheduleSaveActionLogs();
+}
+
+function scheduleSaveActionLogs() {
+  if (actionLogSaveTimer) return;
+  actionLogSaveTimer = setTimeout(async () => {
+    actionLogSaveTimer = null;
+    await flushActionLogsToDisk();
+  }, 200);
+}
+
+async function flushActionLogsToDisk() {
+  if (actionLogSaveTimer) {
+    clearTimeout(actionLogSaveTimer);
+    actionLogSaveTimer = null;
+  }
+  try {
+    await chrome.storage.local.set({ actionLogs: actionLogs.slice(0, 200) });
+  } catch (err) {
+    console.warn('Failed to save actionLogs to disk:', err);
+  }
+}
+
+window.addEventListener('beforeunload', () => {
+  flushActionLogsToDisk();
+});
+window.addEventListener('pagehide', () => {
+  flushActionLogsToDisk();
+});
+
+function renderActionLogBadge() {
+  if (actionLogBadge) {
+    actionLogBadge.textContent = String(actionLogs.length);
+  }
+  if (actionLogTotalCount) {
+    actionLogTotalCount.textContent = `共 ${actionLogs.length} 条关键操作记录`;
+  }
+}
+
+function renderActionLogList() {
+  if (!actionLogList) return;
+  if (actionLogs.length === 0) {
+    actionLogList.innerHTML = '<div class="action-log-empty">暂无任何关键操作记录</div>';
+    return;
+  }
+  actionLogList.innerHTML = actionLogs
+    .map((item) => {
+      const catClass = `cat-${item.category}`;
+      const catName = CATEGORY_NAMES[item.category] || item.category;
+      const displayTime = item.timestamp
+        ? formatActionTimestamp(item.timestamp)
+        : item.timeStr || '';
+      return `
+        <div class="action-log-item">
+          <span class="action-log-time">[${escapeHtml(displayTime)}]</span>
+          <span class="action-log-pill ${catClass}">【${escapeHtml(catName)}】</span>
+          <strong class="action-log-title">${escapeHtml(item.title)}</strong>
+          <span class="action-log-detail">${escapeHtml(item.detail)}</span>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+// Queue Timer
+let queueTimerInterval = null;
+let queueTimerStartedAt = 0;
+let queueTimerAccumulatedMs = 0;
+
+function startQueueTimer() {
+  stopQueueTimer();
+  queueTimerStartedAt = Date.now();
+  queueTimerAccumulatedMs = 0;
+  if (queueTimerBox) {
+    queueTimerBox.classList.remove('is-paused');
+    queueTimerBox.classList.add('is-running');
+  }
+  updateQueueTimerDisplay();
+  queueTimerInterval = setInterval(updateQueueTimerDisplay, 1000);
+}
+
+function pauseQueueTimer() {
+  if (queueTimerInterval) {
+    clearInterval(queueTimerInterval);
+    queueTimerInterval = null;
+  }
+  if (queueTimerStartedAt > 0) {
+    queueTimerAccumulatedMs += Date.now() - queueTimerStartedAt;
+    queueTimerStartedAt = 0;
+  }
+  if (queueTimerBox) {
+    queueTimerBox.classList.remove('is-running');
+    queueTimerBox.classList.add('is-paused');
+  }
+  if (queueTimerText) {
+    queueTimerText.textContent = `任务已进行 ${formatDurationChinese(queueTimerAccumulatedMs)} (已暂停)`;
+  }
+}
+
+function resumeQueueTimer() {
+  queueTimerStartedAt = Date.now();
+  if (queueTimerBox) {
+    queueTimerBox.classList.remove('is-paused');
+    queueTimerBox.classList.add('is-running');
+  }
+  updateQueueTimerDisplay();
+  if (!queueTimerInterval) {
+    queueTimerInterval = setInterval(updateQueueTimerDisplay, 1000);
+  }
+}
+
+function stopQueueTimer(finalDurationMs = null) {
+  if (queueTimerInterval) {
+    clearInterval(queueTimerInterval);
+    queueTimerInterval = null;
+  }
+  const totalMs =
+    finalDurationMs !== null
+      ? finalDurationMs
+      : queueTimerAccumulatedMs +
+        (queueTimerStartedAt > 0 ? Date.now() - queueTimerStartedAt : 0);
+
+  if (queueTimerBox) {
+    queueTimerBox.classList.remove('is-running', 'is-paused');
+  }
+  if (queueTimerText) {
+    if (totalMs > 0) {
+      queueTimerText.textContent = `任务已进行 ${formatDurationChinese(totalMs)}`;
+    } else {
+      queueTimerText.textContent = '任务等待启动';
+    }
+  }
+  queueTimerStartedAt = 0;
+  queueTimerAccumulatedMs = 0;
+}
+
+function updateQueueTimerDisplay() {
+  if (!queueTimerText) return;
+  const currentRunningMs = queueTimerStartedAt > 0 ? Date.now() - queueTimerStartedAt : 0;
+  const totalElapsedMs = queueTimerAccumulatedMs + currentRunningMs;
+  queueTimerText.textContent = `任务已进行 ${formatDurationChinese(totalElapsedMs)}`;
 }
 
 // ============================================================================
@@ -622,18 +868,51 @@ function createNamedClipboardFile(blobOrFile) {
 
 async function extractFilesFromDataTransfer(dataTransfer) {
   if (!dataTransfer) return { files: [], dirHandle: null };
-  const collected = [];
+
+  // 1. Synchronously snapshot standard files and items before ANY await causes Chromium to detach the DataTransfer
+  const directFiles = dataTransfer.files ? Array.from(dataTransfer.files) : [];
+  const rawItems = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+
+  // 2. Synchronously inspect webkitGetAsEntry() before the event loop yields
+  const entryPairs = [];
+  for (const item of rawItems) {
+    if (item.kind === 'file') {
+      let entry = null;
+      try {
+        if (typeof item.webkitGetAsEntry === 'function') {
+          entry = item.webkitGetAsEntry();
+        }
+      } catch {
+        entry = null;
+      }
+      entryPairs.push({ item, entry });
+    }
+  }
+
+  const hasAnyDirectory = entryPairs.some((p) => p.entry && p.entry.isDirectory);
+
+  // 3. Fast Path: If no directories were dropped and directFiles contains images, return them immediately
+  if (!hasAnyDirectory && directFiles.length > 0) {
+    const supported = directFiles.filter(
+      (f) => isSupportedImageFile(f.name) || (f.type && f.type.startsWith('image/'))
+    );
+    if (supported.length > 0) {
+      return {
+        files: supported.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+        dirHandle: null
+      };
+    }
+  }
+
+  // 4. If a directory was dropped, try modern File System Access API first to preserve directory handles
   let droppedDirHandle = null;
-
-  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
-
-  // Try modern File System Access API getAsFileSystemHandle() to capture directory handle if a folder is dropped
-  for (const item of items) {
-    if (item.kind === 'file' && typeof item.getAsFileSystemHandle === 'function') {
+  for (const { item, entry } of entryPairs) {
+    if (entry && entry.isDirectory && typeof item.getAsFileSystemHandle === 'function') {
       try {
         const handle = await item.getAsFileSystemHandle();
-        if (handle && handle.kind === 'directory' && !droppedDirHandle) {
+        if (handle && handle.kind === 'directory') {
           droppedDirHandle = handle;
+          break;
         }
       } catch {
         // Ignore
@@ -641,26 +920,31 @@ async function extractFilesFromDataTransfer(dataTransfer) {
     }
   }
 
-  // Support dragged directories via webkitGetAsEntry if available
-  const entries = items
-    .filter((item) => item.kind === 'file' && typeof item.webkitGetAsEntry === 'function')
-    .map((item) => item.webkitGetAsEntry())
-    .filter(Boolean);
+  if (droppedDirHandle) {
+    return { files: [], dirHandle: droppedDirHandle };
+  }
 
-  if (entries.length > 0) {
-    async function readEntry(entry) {
-      if (entry.isFile) {
+  // 5. Fallback traversal for directories (or mixed drops) using webkitGetAsEntry
+  const collected = [];
+  async function readEntry(entry) {
+    if (!entry) return;
+    if (entry.isFile) {
+      try {
         const file = await new Promise((resolve) => entry.file(resolve, () => resolve(null)));
         if (file && (isSupportedImageFile(file.name) || (file.type && file.type.startsWith('image/')))) {
           collected.push(file);
         }
-      } else if (entry.isDirectory) {
+      } catch {
+        // Ignore
+      }
+    } else if (entry.isDirectory) {
+      try {
         const reader = entry.createReader();
         const readBatch = async () => {
           const batch = await new Promise((resolve) =>
             reader.readEntries(resolve, () => resolve([]))
           );
-          if (batch.length > 0) {
+          if (batch && batch.length > 0) {
             for (const sub of batch) {
               await readEntry(sub);
             }
@@ -668,35 +952,89 @@ async function extractFilesFromDataTransfer(dataTransfer) {
           }
         };
         await readBatch();
+      } catch {
+        // Ignore
       }
     }
+  }
 
-    for (const entry of entries) {
+  for (const { entry } of entryPairs) {
+    if (entry) {
       await readEntry(entry);
     }
-    if (collected.length > 0) {
-      return {
-        files: collected.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
-        dirHandle: droppedDirHandle
-      };
-    }
   }
 
-  // Fallback to standard dataTransfer.files
-  if (dataTransfer.files && dataTransfer.files.length > 0) {
-    for (const f of Array.from(dataTransfer.files)) {
-      if (isSupportedImageFile(f.name) || (f.type && f.type.startsWith('image/'))) {
-        collected.push(f);
+  if (collected.length > 0) {
+    const seen = new Set();
+    const unique = [];
+    for (const f of collected) {
+      const key = `${f.name}_${f.size}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(f);
       }
     }
+    return {
+      files: unique.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+      dirHandle: null
+    };
   }
+
+  // 6. Final safety net: filter directFiles
+  const fallbackFiles = directFiles.filter(
+    (f) => isSupportedImageFile(f.name) || (f.type && f.type.startsWith('image/'))
+  );
   return {
-    files: collected.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
-    dirHandle: droppedDirHandle
+    files: fallbackFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+    dirHandle: null
   };
 }
 
-async function scanDirectoryHandleForImages(rootDirHandle) {
+async function extractFoldersFromDataTransfer(dataTransfer) {
+  if (!dataTransfer) return [];
+  const rawItems = dataTransfer.items ? Array.from(dataTransfer.items) : [];
+  const entryPairs = [];
+  for (const item of rawItems) {
+    if (item.kind === 'file') {
+      let entry = null;
+      try {
+        if (typeof item.webkitGetAsEntry === 'function') {
+          entry = item.webkitGetAsEntry();
+        }
+      } catch {
+        entry = null;
+      }
+      entryPairs.push({ item, entry });
+    }
+  }
+
+  const folderEntries = entryPairs.filter((p) => p.entry && p.entry.isDirectory);
+  const results = [];
+
+  for (const { item, entry } of folderEntries) {
+    let handle = null;
+    if (typeof item.getAsFileSystemHandle === 'function') {
+      try {
+        const h = await item.getAsFileSystemHandle();
+        if (h && h.kind === 'directory') {
+          handle = h;
+        }
+      } catch {
+        // Ignore
+      }
+    }
+    results.push({
+      id: `folder_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name: (handle && handle.name) || (entry && entry.name) || '未命名文件夹',
+      handle,
+      entry
+    });
+  }
+
+  return results;
+}
+
+async function scanDirectoryHandleForImages(rootDirHandle, onProgress = null) {
   const results = [];
   async function walkDir(currentDirHandle, relPrefix = '') {
     const entries = [];
@@ -712,6 +1050,9 @@ async function scanDirectoryHandleForImages(rootDirHandle) {
           dirHandle: currentDirHandle,
           relativePath: relPrefix ? `${relPrefix}/${entry.name}` : entry.name
         });
+        if (typeof onProgress === 'function') {
+          onProgress(results.length, entry.name);
+        }
       } else if (entry.kind === 'directory') {
         await walkDir(entry, relPrefix ? `${relPrefix}/${entry.name}` : entry.name);
       }
@@ -719,6 +1060,227 @@ async function scanDirectoryHandleForImages(rootDirHandle) {
   }
   await walkDir(rootDirHandle, '');
   return results;
+}
+
+async function scanDirectoryEntryForImages(dirEntry, onProgress = null) {
+  const results = [];
+  async function walk(entry, relPrefix = '') {
+    if (entry.isFile) {
+      if (isSupportedImageFile(entry.name)) {
+        const file = await new Promise((resolve) => entry.file(resolve, () => resolve(null)));
+        if (file) {
+          results.push({
+            file,
+            dirHandle: null,
+            relativePath: relPrefix ? `${relPrefix}/${entry.name}` : entry.name
+          });
+          if (typeof onProgress === 'function') {
+            onProgress(results.length, entry.name);
+          }
+        }
+      }
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const readBatch = async () => {
+        const batch = await new Promise((resolve) =>
+          reader.readEntries(resolve, () => resolve([]))
+        );
+        if (batch && batch.length > 0) {
+          for (const sub of batch) {
+            await walk(sub, relPrefix ? `${relPrefix}/${sub.name}` : sub.name);
+          }
+          await readBatch();
+        }
+      };
+      await readBatch();
+    }
+  }
+  await walk(dirEntry, '');
+  return results;
+}
+
+function renderFolderStagingUI() {
+  if (!folderStagingArea) return;
+  if (stagedFolders.length === 0) {
+    if (folderEmptyPrompt) folderEmptyPrompt.hidden = false;
+    if (folderCardsContainer) {
+      folderCardsContainer.hidden = true;
+      folderCardsContainer.innerHTML = '';
+    }
+    if (stagedFolderCountHint) stagedFolderCountHint.textContent = '尚未添加待扫描的文件夹';
+    if (btnConfirmScanFolders) {
+      btnConfirmScanFolders.disabled = true;
+      btnConfirmScanFolders.textContent = '确定扫描';
+    }
+  } else {
+    if (folderEmptyPrompt) folderEmptyPrompt.hidden = true;
+    if (folderCardsContainer) {
+      folderCardsContainer.hidden = false;
+      folderCardsContainer.innerHTML = '';
+      stagedFolders.forEach((f, idx) => {
+        const card = document.createElement('div');
+        card.className = 'folder-card';
+        card.innerHTML = `
+          <div class="folder-card-icon">📁</div>
+          <div class="folder-card-info">
+            <div class="folder-card-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+            <div class="folder-card-badge">待扫描文件夹 #${idx + 1}</div>
+          </div>
+          <button type="button" class="folder-card-remove" title="移除此文件夹" data-id="${f.id}">✕</button>
+        `;
+        const btnRemove = card.querySelector('.folder-card-remove');
+        if (btnRemove) {
+          btnRemove.addEventListener('click', (e) => {
+            e.stopPropagation();
+            stagedFolders = stagedFolders.filter((item) => item.id !== f.id);
+            renderFolderStagingUI();
+            updateDirStatusBanner();
+          });
+        }
+        folderCardsContainer.appendChild(card);
+      });
+    }
+    if (stagedFolderCountHint) {
+      stagedFolderCountHint.textContent = `已添加 ${stagedFolders.length} 个待扫描文件夹`;
+    }
+    if (btnConfirmScanFolders) {
+      btnConfirmScanFolders.disabled = false;
+      btnConfirmScanFolders.textContent = `确定扫描 (${stagedFolders.length} 个文件夹)`;
+    }
+  }
+}
+
+function stageFolder(folderObj) {
+  if (!folderObj || !folderObj.name) return;
+  if (stagedFolders.some((f) => f.name === folderObj.name)) {
+    alert(`文件夹 [${folderObj.name}] 已在待扫描列表中。`);
+    return;
+  }
+  stagedFolders.push(folderObj);
+  renderFolderStagingUI();
+  updateDirStatusBanner();
+  queueLiveStepText.textContent = `已添加待扫描文件夹: [${folderObj.name}]（当前共 ${stagedFolders.length} 个文件夹待扫描）。请点击右下角“确定扫描”开始解析图片。`;
+  logAction(
+    'IMPORT',
+    '添加待扫描文件夹',
+    `已添加 [${folderObj.name}]（当前共 ${stagedFolders.length} 个文件夹待扫描）`
+  );
+}
+
+async function executeScanStagedFolders() {
+  if (stagedFolders.length === 0) return;
+  if (btnConfirmScanFolders) btnConfirmScanFolders.disabled = true;
+  if (scanProgressWrap) scanProgressWrap.hidden = false;
+  if (scanProgressBar) scanProgressBar.style.width = '0%';
+  if (scanProgressPct) scanProgressPct.textContent = '0%';
+  if (scanProgressText) scanProgressText.textContent = `准备开始扫描 ${stagedFolders.length} 个文件夹...`;
+  logAction(
+    'SCAN',
+    '开始扫描文件夹',
+    `开始扫描 ${stagedFolders.length} 个文件夹: ${stagedFolders.map((f) => f.name).join(', ')}`
+  );
+
+  const totalFolders = stagedFolders.length;
+  let allScannedItems = [];
+  let processedFolders = 0;
+
+  for (let i = 0; i < totalFolders; i++) {
+    const f = stagedFolders[i];
+    const basePct = Math.round((i / totalFolders) * 100);
+    if (scanProgressBar) scanProgressBar.style.width = `${basePct}%`;
+    if (scanProgressPct) scanProgressPct.textContent = `${basePct}%`;
+    if (scanProgressText) {
+      scanProgressText.textContent = `[${i + 1}/${totalFolders}] 正在扫描文件夹: ${f.name} (已累计发现 ${allScannedItems.length} 张图片)...`;
+    }
+
+    const onProgress = (currentFolderCount, currentFileName) => {
+      if (scanProgressText) {
+        scanProgressText.textContent = `[${i + 1}/${totalFolders}] 正在扫描: ${f.name}/${currentFileName} (发现 ${allScannedItems.length + currentFolderCount} 张)...`;
+      }
+    };
+
+    try {
+      if (f.handle) {
+        if (!appState.inputDirHandle) {
+          appState.inputDirHandle = f.handle;
+          await saveDirHandleToDb('inputDirHandle', f.handle);
+        }
+        const scanned = await scanDirectoryHandleForImages(f.handle, onProgress);
+        allScannedItems.push(...scanned);
+      } else if (f.entry) {
+        const scanned = await scanDirectoryEntryForImages(f.entry, onProgress);
+        allScannedItems.push(...scanned);
+      }
+    } catch (err) {
+      console.warn(`扫描文件夹 [${f.name}] 出错:`, err);
+    }
+    processedFolders++;
+  }
+
+  if (scanProgressBar) scanProgressBar.style.width = '100%';
+  if (scanProgressPct) scanProgressPct.textContent = '100%';
+  if (scanProgressText) {
+    scanProgressText.textContent = `扫描完成！共在 ${processedFolders} 个文件夹中发现 ${allScannedItems.length} 张图片，正在导入任务队列...`;
+  }
+
+  await sleepMs(300);
+
+  if (allScannedItems.length === 0) {
+    alert('在所选文件夹中未找到任何符合条件的商品图片（支持 JPG、JPEG、PNG、WebP）。');
+    if (scanProgressWrap) scanProgressWrap.hidden = true;
+    if (btnConfirmScanFolders) btnConfirmScanFolders.disabled = false;
+    return;
+  }
+
+  const added = await addFilesToTaskList(allScannedItems, null, { suppressLog: true });
+  appState.tasksScanned = true;
+  stagedFolders = [];
+  if (scanProgressWrap) scanProgressWrap.hidden = true;
+
+  renderImportModeUI();
+  queueLiveStepText.textContent = `已通过扫描 ${totalFolders} 个文件夹总共导入 ${allScannedItems.length} 张图，识别有效图片 ${added} 张`;
+  logAction(
+    'SCAN',
+    '完成文件夹扫描',
+    `共在 ${totalFolders} 个文件夹中扫描出 ${allScannedItems.length} 张图片，成功识别有效图片 ${added} 张`
+  );
+}
+
+function renderImportModeUI() {
+  const isFolderMode = selectImportMode ? selectImportMode.value === 'FOLDER' : true;
+  appState.importMode = isFolderMode ? 'FOLDER' : 'IMAGES';
+
+  // Toggle toolbar buttons
+  if (btnPickInputDir) btnPickInputDir.hidden = !isFolderMode;
+  if (btnPickFiles) btnPickFiles.hidden = isFolderMode;
+
+  const hasTasks = appState.tasks.length > 0;
+
+  if (hasTasks) {
+    // LOCK STATE:
+    // Once tasks are loaded (from folder scan or direct image import), lock the mode & disable adding more
+    if (selectImportMode) selectImportMode.disabled = true;
+    if (btnPickInputDir) btnPickInputDir.disabled = true;
+    if (btnPickFiles) btnPickFiles.disabled = true;
+    if (folderStagingArea) folderStagingArea.hidden = true;
+    if (imageTaskList) imageTaskList.hidden = false;
+  } else {
+    // UNLOCKED STATE:
+    if (selectImportMode) selectImportMode.disabled = false;
+    if (btnPickInputDir) btnPickInputDir.disabled = false;
+    if (btnPickFiles) btnPickFiles.disabled = false;
+
+    if (isFolderMode) {
+      if (folderStagingArea) folderStagingArea.hidden = false;
+      if (imageTaskList) imageTaskList.hidden = true;
+      renderFolderStagingUI();
+    } else {
+      if (folderStagingArea) folderStagingArea.hidden = true;
+      if (imageTaskList) imageTaskList.hidden = false;
+    }
+  }
+
+  updateDirStatusBanner();
 }
 
 async function addFilesToTaskList(fileList, defaultSourceDirHandle = null, options = {}) {
@@ -779,15 +1341,28 @@ async function addFilesToTaskList(fileList, defaultSourceDirHandle = null, optio
   }
   renderTaskList();
   updateDirStatusBanner();
+  renderImportModeUI();
+  if (addedCount > 0 && !options.suppressLog) {
+    logAction('IMPORT', '导入图片', `成功添加 ${addedCount} 张有效图片至任务队列`);
+  }
   return addedCount;
 }
 
 function updateDirStatusBanner() {
   const hasFolderHandle =
     Boolean(appState.inputDirHandle) || appState.tasks.some((t) => Boolean(t.sourceDirHandle));
-  const inName = appState.inputDirHandle
-    ? `文件夹 [${appState.inputDirHandle.name}] (${appState.tasks.length} 张)`
-    : `已导入 ${appState.tasks.length} 张商品原图`;
+  let inName;
+  if (appState.tasks.length > 0) {
+    const modeLabel = appState.importMode === 'FOLDER' ? '文件夹扫描' : '直接图片';
+    inName = `已通过${modeLabel}导入 ${appState.tasks.length} 张图片（已锁定新增导入，如需重新导入请点击“清空列表”）`;
+  } else if (selectImportMode && selectImportMode.value === 'FOLDER') {
+    inName = stagedFolders.length > 0
+      ? `待扫描文件夹：已添加 ${stagedFolders.length} 个文件夹（点击右下角“确定扫描”开始解析图片）`
+      : '未选择文件夹（可拖拽或点击“选择文件夹”，添加后点击右下角“确定扫描”）';
+  } else {
+    inName = '未选择图片（可拖拽图片到列表或按 Ctrl+V 粘贴）';
+  }
+
   let outName;
   if (hasFolderHandle) {
     outName = isOverwriteModeEnabled()
@@ -1220,6 +1795,8 @@ function openBeforeAfterModal(task) {
   } | 耗时: ${task.durationMs ? (task.durationMs / 1000).toFixed(1) + 's' : '-'}`;
   previewOrigImg.src = task.thumbUrl;
   previewEnhancedImg.src = task.enhancedThumbUrl;
+  if (chkSyncFromOrig) chkSyncFromOrig.checked = true;
+  if (chkSyncFromEnhanced) chkSyncFromEnhanced.checked = true;
   origZoomCtrl.resetZoom();
   enhancedZoomCtrl.resetZoom();
   previewDialog.showModal();
@@ -1423,6 +2000,7 @@ async function executeSingleTaskPipeline(task, taskIndex) {
   queueLiveStepText.textContent = `[${taskIndex + 1}/${appState.tasks.length}] 正在上传并校验参考原图: ${task.name} (maseQ)...`;
   renderTaskList();
   await saveTaskToDb(task, taskIndex);
+  logAction('PROCESS', '上传参考原图', `[${task.name}] 正在上传参考原图至 Google Flow (maseQ)...`);
 
   const uniqueUpload = await blobToUniqueUploadBase64(
     task.sourceBlob,
@@ -1451,6 +2029,7 @@ async function executeSingleTaskPipeline(task, taskIndex) {
   )}...)，正在调用 ${selectedModelVal} 执行图生图 (ogiZ0b)...`;
   renderTaskList();
   await saveTaskToDb(task, taskIndex);
+  logAction('PROCESS', 'AI图生图增强', `[${task.name}] 正在调用 ${selectedModelVal} 生成增强图像 (ogiZ0b)...`);
 
   let genRes = null;
   try {
@@ -1514,6 +2093,11 @@ async function executeSingleTaskPipeline(task, taskIndex) {
     )}...)，正在执行 ${selectedResolutionVal} 超分放大导出 (SPrCad)...`;
     renderTaskList();
     await saveTaskToDb(task, taskIndex);
+    logAction(
+      'PROCESS',
+      '超清放大导出',
+      `[${task.name}] 正在执行 ${selectedResolutionVal} 超分放大 (SPrCad)...`
+    );
 
     const upscaleRes = await sendFlowCommand('EXECUTE_UPSCALE_IMAGE', {
       generatedMediaId,
@@ -1576,6 +2160,11 @@ async function executeSingleTaskPipeline(task, taskIndex) {
 
   await saveTaskToDb(task, taskIndex);
   renderTaskList();
+  logAction(
+    'COMPLETE',
+    '完成单张图片',
+    `[${task.name}] 成功保存为 ${outputFileName} (耗时: ${(task.durationMs / 1000).toFixed(1)}s)`
+  );
 }
 
 // ============================================================================
@@ -1649,6 +2238,13 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
   renderTaskList();
 
   const queueRunStartTime = Date.now();
+  startQueueTimer();
+  logAction(
+    'QUEUE',
+    '开始全部队列',
+    `启动批量图生图队列，共 ${pendingTasks.length} 个待处理任务 (AI模型: ${selectModel.value}, 分辨率: ${selectResolution.value})`
+  );
+
   const maxRetries = Number(selectMaxRetries.value) || 0;
   let processedInThisRun = 0;
   let failedInThisRun = 0;
@@ -1666,6 +2262,8 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
 
     if (appState.pauseRequested) {
       appState.queueStatus = 'PAUSED';
+      pauseQueueTimer();
+      logAction('QUEUE', '暂停队列', `队列已暂停（当前批次已完成 ${processedInThisRun} 张）`);
       queueLiveStepText.textContent = `队列已暂停（已完成 ${processedInThisRun} 张，点击“继续队列”可从当前位置恢复）。`;
       renderTaskList();
       return;
@@ -1709,6 +2307,8 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
           task.errorMsg = msg;
           await saveTaskToDb(task, i);
           appState.queueStatus = 'PAUSED';
+          stopQueueTimer();
+          logAction('QUEUE', '关键响应暂停', `检测到关键响应 (${msg})，队列已自动暂停以保护账号额度`);
           queueLiveStepText.textContent = `检测到关键响应 (${msg})，队列已自动暂停以保护账号额度。`;
           renderTaskList();
           return;
@@ -1720,6 +2320,7 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
           failedInThisRun++;
           await saveTaskToDb(task, i);
           renderTaskList();
+          logAction('ERROR', '单张处理失败', `[${task.name}] 失败: ${msg}`);
         }
       }
     }
@@ -1727,7 +2328,9 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
     // Check if we reached sample test limit
     if (sampleLimit && processedInThisRun >= sampleLimit) {
       appState.queueStatus = 'IDLE';
+      stopQueueTimer();
       queueLiveStepText.textContent = `样本测试完成（已成功处理 ${processedInThisRun} 张图片）！请点击列表中的“对比预览”检查效果，满意后可点击“开始全部队列”继续处理剩余图片。`;
+      logAction('QUEUE', '样本测试完成', `已成功测试处理 ${processedInThisRun} 张图片`);
       renderTaskList();
       return;
     }
@@ -1748,7 +2351,13 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
   const totalFailed = appState.tasks.filter((t) => t.status === 'FAILED').length;
   const totalElapsedMs = Math.max(1000, Date.now() - queueRunStartTime);
   const avgElapsedMs = Math.round(totalElapsedMs / Math.max(1, attemptedInThisRun));
+  stopQueueTimer(totalElapsedMs);
   queueLiveStepText.textContent = `队列执行完毕！共成功 ${totalCompleted} 张，失败 ${totalFailed} 张（耗时 ${formatDurationChinese(totalElapsedMs)}）。`;
+  logAction(
+    'QUEUE',
+    '队列执行完毕',
+    `共成功 ${totalCompleted} 张，失败 ${totalFailed} 张，总共耗时 ${formatDurationChinese(totalElapsedMs)}，平均每张 ${formatDurationChinese(avgElapsedMs)}`
+  );
   renderTaskList();
 
   if (!appState.cancelRequested && attemptedInThisRun > 0) {
@@ -1759,27 +2368,6 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
       avgDurationMs: avgElapsedMs
     });
   }
-}
-
-/**
- * Formats milliseconds into Chinese duration string, e.g.:
- * - 1小时2分20秒
- * - 3分10秒
- * - 55秒
- */
-function formatDurationChinese(ms) {
-  const totalSeconds = Math.max(1, Math.round(ms / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}小时${minutes}分${seconds}秒`;
-  }
-  if (minutes > 0) {
-    return `${minutes}分${seconds}秒`;
-  }
-  return `${seconds}秒`;
 }
 
 function showQueueCompletionModal({ successCount, failedCount, totalDurationMs, avgDurationMs }) {
@@ -1908,8 +2496,75 @@ async function initWorkbench() {
 
   await restoreDirHandlesFromDb();
   await restoreTasksFromDb();
+  if (appState.tasks.length > 0) {
+    appState.tasksScanned = true;
+  }
   renderTaskList();
-  updateDirStatusBanner();
+  renderImportModeUI();
+
+  if (selectImportMode) {
+    selectImportMode.addEventListener('change', () => {
+      renderImportModeUI();
+    });
+  }
+
+  if (btnConfirmScanFolders) {
+    btnConfirmScanFolders.addEventListener('click', executeScanStagedFolders);
+  }
+
+  const { actionLogs: storedLogs } = await chrome.storage.local.get(['actionLogs']);
+  if (Array.isArray(storedLogs)) {
+    actionLogs = storedLogs;
+    renderActionLogBadge();
+  }
+
+  if (btnOpenActionLog && actionLogDialog) {
+    btnOpenActionLog.addEventListener('click', () => {
+      renderActionLogList();
+      actionLogDialog.showModal();
+    });
+  }
+
+  if (btnCopyActionLog) {
+    btnCopyActionLog.addEventListener('click', async () => {
+      if (actionLogs.length === 0) {
+        if (actionLogFeedback) actionLogFeedback.textContent = '暂无记录可复制';
+        return;
+      }
+      const text = actionLogs
+        .map((a) => {
+          const displayTime = a.timestamp ? formatActionTimestamp(a.timestamp) : a.timeStr;
+          return `[${displayTime}] 【${CATEGORY_NAMES[a.category] || a.category}】 ${a.title} - ${a.detail}`;
+        })
+        .join('\n');
+      try {
+        await navigator.clipboard.writeText(text);
+        if (actionLogFeedback) {
+          actionLogFeedback.textContent = '已复制全部行为记录到剪贴板！';
+          setTimeout(() => {
+            if (actionLogFeedback) actionLogFeedback.textContent = '';
+          }, 2000);
+        }
+      } catch (err) {
+        if (actionLogFeedback) actionLogFeedback.textContent = `复制失败: ${err.message}`;
+      }
+    });
+  }
+
+  if (btnClearActionLog) {
+    btnClearActionLog.addEventListener('click', async () => {
+      actionLogs = [];
+      await chrome.storage.local.set({ actionLogs: [] });
+      renderActionLogBadge();
+      renderActionLogList();
+      if (actionLogFeedback) {
+        actionLogFeedback.textContent = '已清空历史行为记录！';
+        setTimeout(() => {
+          if (actionLogFeedback) actionLogFeedback.textContent = '';
+        }, 1500);
+      }
+    });
+  }
 
   await checkFlowConnection();
   await loadCapturedProtocolData();
@@ -1990,6 +2645,8 @@ async function initWorkbench() {
   });
 
   btnResumeQueue.addEventListener('click', () => {
+    resumeQueueTimer();
+    logAction('QUEUE', '继续队列', '从当前暂停位置继续执行剩余队列');
     startQueueLoop({ sampleLimit: null });
   });
 
@@ -1997,6 +2654,8 @@ async function initWorkbench() {
     appState.cancelRequested = true;
     appState.pauseRequested = false;
     appState.queueStatus = 'IDLE';
+    stopQueueTimer();
+    logAction('QUEUE', '取消队列', '用户取消了队列执行');
     for (let i = 0; i < appState.tasks.length; i++) {
       if (['UPLOADING', 'GENERATING', 'UPSCALING', 'SAVING'].includes(appState.tasks[i].status)) {
         appState.tasks[i].status = 'CANCELLED';
@@ -2054,16 +2713,21 @@ async function initWorkbench() {
 
   // File & Directory Management Buttons
   btnPickInputDir.addEventListener('click', async () => {
+    if (appState.tasks.length > 0) {
+      alert('已完成文件夹扫描，任务已锁定。如需重新选择文件夹，请先点击“清空列表”。');
+      return;
+    }
     if (typeof window.showDirectoryPicker !== 'function') {
-      fileInputFallback.click();
+      alert('当前浏览器环境不支持 window.showDirectoryPicker。');
       return;
     }
     try {
       const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      appState.inputDirHandle = dirHandle;
-      await saveDirHandleToDb('inputDirHandle', dirHandle);
-      const scannedItems = await scanDirectoryHandleForImages(dirHandle);
-      await addFilesToTaskList(scannedItems, dirHandle);
+      stageFolder({
+        id: `folder_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name: dirHandle.name,
+        handle: dirHandle
+      });
     } catch (err) {
       if (err.name !== 'AbortError') {
         console.warn('Directory picker error:', err);
@@ -2072,16 +2736,23 @@ async function initWorkbench() {
   });
 
   btnPickFiles.addEventListener('click', () => {
+    if (appState.tasks.length > 0) {
+      alert('已导入图片任务，当前处于锁定状态。如需重新导入，请先点击“清空列表”。');
+      return;
+    }
     fileInputFallback.click();
   });
 
   fileInputFallback.addEventListener('change', async (e) => {
+    if (appState.tasks.length > 0) return;
     if (e.target.files?.length > 0) {
       const sortedFiles = Array.from(e.target.files).sort((a, b) =>
         a.name.localeCompare(b.name, undefined, { numeric: true })
       );
-      await addFilesToTaskList(sortedFiles);
+      const added = await addFilesToTaskList(sortedFiles);
+      queueLiveStepText.textContent = `已总共导入${sortedFiles.length}张图，识别有效图片${added}张`;
       fileInputFallback.value = '';
+      renderImportModeUI();
     }
   });
 
@@ -2090,6 +2761,7 @@ async function initWorkbench() {
   const setDragHighlight = (active) => {
     if (imageDropZone) imageDropZone.classList.toggle('is-dragover', active);
     if (imageTaskList) imageTaskList.classList.toggle('is-dragover', active);
+    if (folderStagingArea) folderStagingArea.classList.toggle('is-dragover', active);
   };
 
   window.addEventListener('dragover', (e) => {
@@ -2131,26 +2803,46 @@ async function initWorkbench() {
       dragEnterDepth = 0;
       setDragHighlight(false);
 
-      const { files: droppedFiles, dirHandle: droppedDirHandle } =
-        await extractFilesFromDataTransfer(e.dataTransfer);
-      if (droppedDirHandle) {
-        appState.inputDirHandle = droppedDirHandle;
-        await saveDirHandleToDb('inputDirHandle', droppedDirHandle);
-        const scannedItems = await scanDirectoryHandleForImages(droppedDirHandle);
-        if (scannedItems.length > 0) {
-          const added = await addFilesToTaskList(scannedItems, droppedDirHandle);
-          queueLiveStepText.textContent = `已通过拖拽文件夹导入 ${added} 张图片（共识别 ${scannedItems.length} 张图片文件）。`;
-          return;
-        }
+      if (appState.tasks.length > 0) {
+        queueLiveStepText.textContent =
+          '已完成图片扫描并生成任务列表，当前处于锁定状态。不可再次导入文件夹或图片，如需重新导入请先点击“清空列表”。';
+        return;
       }
-      if (droppedFiles.length > 0) {
-        const added = await addFilesToTaskList(
-          droppedFiles,
-          droppedDirHandle || appState.inputDirHandle
-        );
-        queueLiveStepText.textContent = `已通过拖拽导入 ${added} 张图片（共识别 ${droppedFiles.length} 张图片文件）。`;
+
+      const isFolderMode = selectImportMode ? selectImportMode.value === 'FOLDER' : true;
+
+      if (isFolderMode) {
+        // Mode 1: 导入文件夹
+        const droppedFolders = await extractFoldersFromDataTransfer(e.dataTransfer);
+        if (droppedFolders.length > 0) {
+          let addedCount = 0;
+          for (const f of droppedFolders) {
+            if (!stagedFolders.some((s) => s.name === f.name)) {
+              stagedFolders.push(f);
+              addedCount++;
+            }
+          }
+          renderFolderStagingUI();
+          updateDirStatusBanner();
+          queueLiveStepText.textContent = `已添加 ${addedCount} 个待扫描文件夹（当前共 ${stagedFolders.length} 个待扫描）。请点击右下角“确定扫描”开始解析图片。`;
+        } else {
+          queueLiveStepText.textContent =
+            '当前处于【导入文件夹】模式，请拖入文件夹；或切换左上角下拉选项为【导入图片】模式。';
+        }
       } else {
-        queueLiveStepText.textContent = '拖拽内容中未检测到支持的图片文件（支持 JPG、JPEG、PNG、WebP）。';
+        // Mode 2: 导入图片
+        const { files: droppedFiles } = await extractFilesFromDataTransfer(e.dataTransfer);
+        if (droppedFiles.length > 0) {
+          const added = await addFilesToTaskList(
+            droppedFiles,
+            appState.inputDirHandle
+          );
+          queueLiveStepText.textContent = `已通过拖拽总共导入${droppedFiles.length}张图，识别有效图片${added}张`;
+          renderImportModeUI();
+        } else {
+          queueLiveStepText.textContent =
+            '当前处于【导入图片】模式，未检测到支持的图片文件（如需导入文件夹，请先切换左上角为【导入文件夹】）。';
+        }
       }
     });
   }
@@ -2159,6 +2851,18 @@ async function initWorkbench() {
   window.addEventListener('paste', async (e) => {
     const cb = e.clipboardData;
     if (!cb) return;
+
+    if (appState.tasks.length > 0) {
+      queueLiveStepText.textContent =
+        '已生成任务列表，当前处于锁定状态。如需重新导入，请先点击“清空列表”。';
+      return;
+    }
+
+    if (selectImportMode && selectImportMode.value === 'FOLDER') {
+      queueLiveStepText.textContent =
+        '当前处于【导入文件夹】模式。如需直接粘贴图片，请先切换左上角导入方式为【导入图片】。';
+      return;
+    }
 
     const imageFiles = [];
     if (cb.items && cb.items.length > 0) {
@@ -2189,12 +2893,21 @@ async function initWorkbench() {
       queueLiveStepText.textContent = `已从剪贴板 (Ctrl+V) 导入 ${added} 张图片: ${imageFiles
         .map((f) => f.name)
         .join(', ')}`;
+      renderImportModeUI();
     }
   });
 
   // Toolbar "粘贴剪贴板 (Ctrl+V)" button via Async Clipboard API
   if (btnPasteClipboard) {
     btnPasteClipboard.addEventListener('click', async () => {
+      if (appState.tasks.length > 0) {
+        alert('已生成任务列表，当前处于锁定状态。如需重新导入，请先点击“清空列表”。');
+        return;
+      }
+      if (selectImportMode && selectImportMode.value === 'FOLDER') {
+        alert('当前处于【导入文件夹】模式。如需直接粘贴图片，请先切换左上角导入方式为【导入图片】。');
+        return;
+      }
       if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
         alert('请直接按键盘 Ctrl+V 粘贴剪贴板中的图片。');
         return;
@@ -2216,6 +2929,7 @@ async function initWorkbench() {
           queueLiveStepText.textContent = `已从剪贴板导入 ${added} 张图片: ${filesToAdd
             .map((f) => f.name)
             .join(', ')}`;
+          renderImportModeUI();
         } else {
           alert('当前剪贴板中没有检测到图片（请先复制图片或截图，再按 Ctrl+V 或点击此按钮）。');
         }
@@ -2265,14 +2979,28 @@ async function initWorkbench() {
       alert('请先暂停或取消正在运行的队列后再清空列表。');
       return;
     }
+    const clearedTasksCount = appState.tasks.length;
+    const clearedFoldersCount = stagedFolders.length;
     for (const t of appState.tasks) {
       if (t.thumbUrl) URL.revokeObjectURL(t.thumbUrl);
       if (t.enhancedThumbUrl) URL.revokeObjectURL(t.enhancedThumbUrl);
     }
     appState.tasks = [];
+    stagedFolders = [];
+    appState.tasksScanned = false;
     await clearAllTasksFromDb();
     renderTaskList();
-    updateDirStatusBanner();
+    renderImportModeUI();
+    stopQueueTimer();
+    if (queueTimerText) {
+      queueTimerText.textContent = '任务等待启动';
+    }
+    queueLiveStepText.textContent = '任务列表与待扫描文件夹已清空，可重新选择导入方式。';
+    logAction(
+      'CLEAR',
+      '清空列表',
+      `已清空 ${clearedTasksCount} 个任务与 ${clearedFoldersCount} 个待扫描文件夹`
+    );
   });
 
   btnSaveConfig.addEventListener('click', async () => {
