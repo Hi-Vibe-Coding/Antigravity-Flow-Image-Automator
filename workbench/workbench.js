@@ -38,10 +38,33 @@ const appState = {
 };
 
 // DOM references
+const selectUiScale = document.getElementById('selectUiScale');
 const connectionBadge = document.getElementById('connectionBadge');
 const btnSyncCatalog = document.getElementById('btnSyncCatalog');
 const btnRefreshConnection = document.getElementById('btnRefreshConnection');
 const btnOpenFlowTab = document.getElementById('btnOpenFlowTab');
+
+function applyUiScale(scaleMode) {
+  let scaleRatio = 1.0;
+  if (scaleMode === 'auto') {
+    const sw = window.screen.width || window.innerWidth;
+    const dpr = window.devicePixelRatio || 1;
+    const effectiveWidth = sw * dpr;
+
+    // Detect 4K (e.g. 3840x2160) or 2K (e.g. 2560x1440) high-res monitors
+    if (effectiveWidth >= 3200 || sw >= 2560) {
+      scaleRatio = 1.2;
+    } else if (effectiveWidth >= 2200 || sw >= 1920) {
+      scaleRatio = 1.08;
+    } else {
+      scaleRatio = 1.0;
+    }
+  } else {
+    scaleRatio = Number(scaleMode) / 100 || 1.0;
+  }
+
+  document.documentElement.style.zoom = String(scaleRatio);
+}
 
 const diagTabStatus = document.getElementById('diagTabStatus');
 const diagTokenStatus = document.getElementById('diagTokenStatus');
@@ -2565,6 +2588,25 @@ async function initWorkbench() {
       }
     });
   }
+
+  const { uiScaleMode } = await chrome.storage.local.get(['uiScaleMode']);
+  const activeScaleMode = uiScaleMode || 'auto';
+  if (selectUiScale) {
+    selectUiScale.value = activeScaleMode;
+    applyUiScale(activeScaleMode);
+    selectUiScale.addEventListener('change', async () => {
+      const mode = selectUiScale.value;
+      applyUiScale(mode);
+      await chrome.storage.local.set({ uiScaleMode: mode });
+      logAction('QUEUE', '界面缩放调整', `切换缩放模式为: ${mode === 'auto' ? '自动检测 (最佳适配)' : mode + '%'}`);
+    });
+  }
+
+  window.addEventListener('resize', () => {
+    if (selectUiScale && selectUiScale.value === 'auto') {
+      applyUiScale('auto');
+    }
+  });
 
   await checkFlowConnection();
   await loadCapturedProtocolData();

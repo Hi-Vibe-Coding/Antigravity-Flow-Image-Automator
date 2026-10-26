@@ -112,15 +112,63 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* 屏幕分辨率自适应与缩放模式 */
+.ui-scale-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-color);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  user-select: none;
+}
+
+.ui-scale-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.select-ui-scale {
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  background-color: var(--bg-card);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.select-ui-scale:focus {
+  border-color: var(--brand-primary);
 }
 
 .container {
-  max-width: 1360px;
-  margin: 20px auto;
-  padding: 0 24px 40px;
+  width: 96%;
+  max-width: 1880px;
+  margin: 18px auto;
+  padding: 0 16px 40px;
   display: flex;
   flex-direction: column;
   gap: 20px;
+  transition: max-width 0.2s ease;
+}
+
+@media (min-width: 2200px) {
+  .container {
+    max-width: 2360px;
+  }
 }
 
 .card {
@@ -336,11 +384,11 @@ body {
 
 .mvp-workspace-grid {
   display: grid;
-  grid-template-columns: 1.15fr 0.85fr;
-  gap: 20px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.85fr);
+  gap: 22px;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 1080px) {
   .mvp-workspace-grid {
     grid-template-columns: 1fr;
   }
@@ -441,8 +489,8 @@ body {
 .folder-staging-area {
   border: 2px dashed var(--border-color);
   border-radius: 8px;
-  min-height: 240px;
-  max-height: 380px;
+  min-height: 260px;
+  max-height: 480px;
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -450,6 +498,13 @@ body {
   background-color: var(--bg-card);
   position: relative;
   transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+@media (min-height: 900px) {
+  .folder-staging-area {
+    min-height: 320px;
+    max-height: 580px;
+  }
 }
 
 .drop-zone-panel.is-dragover .folder-staging-area,
@@ -651,8 +706,8 @@ body {
 .task-list {
   border: 2px dashed var(--border-color);
   border-radius: 8px;
-  min-height: 240px;
-  max-height: 360px;
+  min-height: 260px;
+  max-height: 480px;
   overflow-y: auto;
   padding: 8px;
   display: flex;
@@ -660,6 +715,20 @@ body {
   gap: 8px;
   transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
   position: relative;
+}
+
+@media (min-height: 900px) {
+  .task-list {
+    min-height: 320px;
+    max-height: 600px;
+  }
+}
+
+@media (min-height: 1100px) {
+  .task-list {
+    min-height: 360px;
+    max-height: 720px;
+  }
 }
 
 .task-list:focus-visible {

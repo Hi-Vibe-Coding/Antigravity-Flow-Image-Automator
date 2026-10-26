@@ -13,11 +13,22 @@
     <div class="brand">
       <img src="../icons/icon-48.png" alt="Logo" class="brand-logo" width="32" height="32">
       <div>
-        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.10</span></h1>
+        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.11</span></h1>
         <p class="subtitle">Google Flow 批量电商产品图增强工作台</p>
       </div>
     </div>
     <div class="topbar-actions">
+      <!-- 屏幕分辨率自适应与缩放模式 -->
+      <div class="ui-scale-picker" title="根据当前 Windows 分辨率与屏幕尺寸自动调整界面铺满程度与字号大小">
+        <label for="selectUiScale" class="ui-scale-label">🖥️ 界面缩放：</label>
+        <select id="selectUiScale" class="select-ui-scale">
+          <option value="auto" selected>自动检测 (最佳适配)</option>
+          <option value="100">100% (标准)</option>
+          <option value="110">110% (大屏适配)</option>
+          <option value="120">120% (2K屏幕推荐)</option>
+          <option value="135">135% (4K超清大屏)</option>
+        </select>
+      </div>
       <span id="connectionBadge" class="status-pill status-warn">正在检测 Google Flow...</span>
       <button id="btnRefreshConnection" type="button" class="btn btn-secondary">刷新连接状态</button>
       <button id="btnOpenFlowTab" type="button" class="btn btn-primary">打开 Google Flow 页面</button>
