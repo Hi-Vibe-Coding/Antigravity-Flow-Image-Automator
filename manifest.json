@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Antigravity Flow Image Automator",
-  "version": "0.3.14",
+  "version": "0.3.19",
   "description": "Bulk AI product image enhancement workbench and non-DOM protocol engine for Google Flow.",
   "icons": {
     "16": "icons/icon-16.png",
@@ -21,14 +21,19 @@
     "unlimitedStorage",
     "tabs",
     "scripting",
-    "downloads"
+    "downloads",
+    "notifications"
   ],
   "host_permissions": [
     "https://flow.google.com/*",
     "https://flow-content.google/*",
     "https://*.googleusercontent.com/*",
     "https://labs.google/*",
-    "https://aisandbox-pa.googleapis.com/*"
+    "https://aisandbox-pa.googleapis.com/*",
+    "https://www.pushplus.plus/*",
+    "http://www.pushplus.plus/*",
+    "https://sctapi.ftqq.com/*",
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js"

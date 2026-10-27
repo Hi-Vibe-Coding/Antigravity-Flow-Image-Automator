@@ -103,6 +103,7 @@ const btnClearCompleted = document.getElementById('btnClearCompleted');
 const btnClearAllTasks = document.getElementById('btnClearAllTasks');
 const chkOverwriteOriginal = document.getElementById('chkOverwriteOriginal');
 const chkNumericNameOnly = document.getElementById('chkNumericNameOnly');
+const chkStopOnFailure = document.getElementById('chkStopOnFailure');
 const fileInputFallback = document.getElementById('fileInputFallback');
 const dirStatusText = document.getElementById('dirStatusText');
 
@@ -169,8 +170,26 @@ const btnCopyActionLog = document.getElementById('btnCopyActionLog');
 const btnClearActionLog = document.getElementById('btnClearActionLog');
 const actionLogFeedback = document.getElementById('actionLogFeedback');
 
+const chkNotifyAudio = document.getElementById('chkNotifyAudio');
+const selectAudioPreset = document.getElementById('selectAudioPreset');
+const btnPreviewAudio = document.getElementById('btnPreviewAudio');
+const chkNotifyDesktop = document.getElementById('chkNotifyDesktop');
+const selectNotifyChannel = document.getElementById('selectNotifyChannel');
+const notifyTokenGroup = document.getElementById('notifyTokenGroup');
+const notifyTokenLabel = document.getElementById('notifyTokenLabel');
+const inputNotifyToken = document.getElementById('inputNotifyToken');
+const btnTestNotify = document.getElementById('btnTestNotify');
+
+const failureStopDialog = document.getElementById('failureStopDialog');
+const failureProgressText = document.getElementById('failureProgressText');
+const failureTaskName = document.getElementById('failureTaskName');
+const failureErrorReason = document.getElementById('failureErrorReason');
+const failureDiagnosticHint = document.getElementById('failureDiagnosticHint');
+const btnFailureRetryCurrent = document.getElementById('btnFailureRetryCurrent');
+const btnFailureSkipAndResume = document.getElementById('btnFailureSkipAndResume');
+
 // Mandatory fallback for browsers without <dialog closedby="any"> support
-for (const dlg of [reportDialog, previewDialog, completionDialog, actionLogDialog]) {
+for (const dlg of [reportDialog, previewDialog, failureStopDialog, completionDialog, actionLogDialog]) {
   if (dlg && !('closedBy' in HTMLDialogElement.prototype)) {
     dlg.addEventListener('click', (event) => {
       if (event.target !== dlg) return;
@@ -410,6 +429,250 @@ function updateQueueTimerDisplay() {
   const currentRunningMs = queueTimerStartedAt > 0 ? Date.now() - queueTimerStartedAt : 0;
   const totalElapsedMs = queueTimerAccumulatedMs + currentRunningMs;
   queueTimerText.textContent = `任务已进行 ${formatDurationChinese(totalElapsedMs)}`;
+}
+
+function isStopOnFailureEnabled() {
+  return chkStopOnFailure ? Boolean(chkStopOnFailure.checked) : true;
+}
+
+function playAudioAlert(preset = null) {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const soundKey = preset || selectAudioPreset?.value || 'classic';
+
+    const playTone = (freq, start, duration, type = 'sine', gainVal = 0.22) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+      gain.gain.setValueAtTime(gainVal, ctx.currentTime + start);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + start);
+      osc.stop(ctx.currentTime + start + duration);
+    };
+
+    if (soundKey === 'dingdong') {
+      // Gentle two-tone doorbell chime: Ding (E5, 659.25Hz) -> Dong (C5, 523.25Hz)
+      playTone(659.25, 0, 0.45, 'sine', 0.25);
+      playTone(523.25, 0.35, 0.7, 'sine', 0.28);
+    } else if (soundKey === 'urgent') {
+      // Rapid siren: alternating between 600Hz and 950Hz
+      playTone(600, 0, 0.12, 'sawtooth', 0.14);
+      playTone(950, 0.12, 0.12, 'sawtooth', 0.14);
+      playTone(600, 0.24, 0.12, 'sawtooth', 0.14);
+      playTone(950, 0.36, 0.12, 'sawtooth', 0.14);
+      playTone(600, 0.48, 0.12, 'sawtooth', 0.14);
+      playTone(950, 0.60, 0.22, 'sawtooth', 0.16);
+    } else if (soundKey === 'radar') {
+      // Tech radar ping: dual high ping with subtle decay
+      playTone(1320, 0, 0.12, 'sine', 0.2);
+      playTone(1760, 0.14, 0.25, 'sine', 0.22);
+      playTone(1320, 0.45, 0.12, 'sine', 0.2);
+      playTone(1760, 0.59, 0.35, 'sine', 0.25);
+    } else if (soundKey === 'marimba') {
+      // Pleasant marimba notes: C5 -> E5 -> G5 -> C6
+      playTone(523.25, 0, 0.2, 'triangle', 0.25);
+      playTone(659.25, 0.12, 0.2, 'triangle', 0.25);
+      playTone(783.99, 0.24, 0.2, 'triangle', 0.25);
+      playTone(1046.5, 0.36, 0.45, 'triangle', 0.28);
+    } else {
+      // Default classic: 880Hz -> 880Hz -> 1174Hz
+      playTone(880, 0, 0.16, 'sine', 0.22);
+      playTone(880, 0.2, 0.16, 'sine', 0.22);
+      playTone(1174, 0.4, 0.32, 'sine', 0.25);
+    }
+  } catch (err) {
+    console.warn('[AudioAlert] Web Audio alert failed:', err);
+  }
+}
+
+function showDesktopNotification(title, message) {
+  try {
+    if (chrome?.notifications?.create) {
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icons/icon-128.png'),
+        title: title || 'Antigravity Flow Image Automator',
+        message: message || '任务发生异常，队列已自动暂停中断',
+        priority: 2,
+        requireInteraction: true
+      });
+    } else if (typeof Notification !== 'undefined') {
+      if (Notification.permission === 'granted') {
+        new Notification(title, { body: message, icon: '../icons/icon-128.png' });
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then((perm) => {
+          if (perm === 'granted') {
+            new Notification(title, { body: message, icon: '../icons/icon-128.png' });
+          }
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[Notification] Failed to show desktop notification:', err);
+  }
+}
+
+async function dispatchFailurePushNotification({ taskName, taskIndex, totalTasks, completedCount, errorMsg, isTest = false }) {
+  const channel = selectNotifyChannel?.value || 'NONE';
+  const token = inputNotifyToken?.value?.trim() || '';
+
+  if (channel === 'NONE') return { success: false, reason: '未启用外部推送渠道' };
+  if (!token) return { success: false, reason: '未填写 Token 或 Webhook URL' };
+
+  const title = isTest
+    ? '🎉 Antigravity Flow 图像自动化 - 推送测试成功'
+    : `⚠️ Flow自动化任务失败暂停 [第${taskIndex + 1}/${totalTasks}]`;
+
+  const remainingCount = Math.max(0, totalTasks - (taskIndex + 1));
+  const content = isTest
+    ? '恭喜！您的微信推送通知配置已连接成功。一旦后续自动化任务发生错误，系统将立即在此向您发送带进度详情的报警卡片！'
+    : [
+        `【异常任务】${taskName}`,
+        `【执行进度】已完成 ${completedCount} 张，当前第 ${taskIndex + 1} 张失败，剩余 ${remainingCount} 张未处理`,
+        `【失败原因】${errorMsg}`,
+        `【系统提示】队列已依据设置自动暂停中断，请进入工作台排查或切换模型重试。`
+      ].join('\n\n');
+
+  try {
+    if (channel === 'PUSHPLUS') {
+      const res = await fetch('https://www.pushplus.plus/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          title,
+          content: content.replace(/\n/g, '<br/>'),
+          template: 'html'
+        })
+      });
+      const data = await res.json();
+      if (data && data.code === 200) {
+        logAction('QUEUE', '微信通知已推送', `已通过 PushPlus 向微信推送失败报警 (${taskName})`);
+        return { success: true };
+      }
+      throw new Error((data && data.msg) || 'PushPlus 返回异常');
+    } else if (channel === 'SERVERCHAN') {
+      const sendUrl = token.startsWith('http')
+        ? token
+        : `https://sctapi.ftqq.com/${token}.send`;
+      const res = await fetch(sendUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          title,
+          desp: content
+        })
+      });
+      const data = await res.json();
+      if (data && (data.code === 0 || data.data?.errno === 0)) {
+        logAction('QUEUE', '微信通知已推送', `已通过 Server酱 向微信推送失败报警 (${taskName})`);
+        return { success: true };
+      }
+      throw new Error((data && data.message) || 'Server酱 返回异常');
+    } else if (channel === 'CUSTOM_WEBHOOK') {
+      const res = await fetch(token, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          msgtype: 'text',
+          text: {
+            content: `${title}\n\n${content}`
+          }
+        })
+      });
+      if (res.ok) {
+        logAction('QUEUE', 'Webhook已推送', `已向自定义 Webhook 推送通知 (${taskName})`);
+        return { success: true };
+      }
+      throw new Error(`Webhook 响应状态码: ${res.status}`);
+    }
+  } catch (err) {
+    console.warn('[PushNotification] Dispatch failed:', err);
+    logAction('ERROR', '推送通知发送失败', `渠道: ${channel}, 错误: ${err.message || String(err)}`);
+    return { success: false, reason: err.message || String(err) };
+  }
+}
+
+let currentModalFailedTask = null;
+let currentModalTaskIndex = -1;
+
+function showFailureStopModal(failedTask, taskIndex, errorMsg) {
+  if (!failureStopDialog) return;
+  currentModalFailedTask = failedTask;
+  currentModalTaskIndex = taskIndex;
+
+  const total = appState.tasks.length;
+  const completedCount = appState.tasks.filter((t) => t.status === 'COMPLETED').length;
+  const remainingCount = Math.max(0, total - (taskIndex + 1));
+  const taskDisplayName = getTaskDisplayName(failedTask);
+
+  if (failureProgressText) {
+    failureProgressText.innerHTML = `已成功完成 <strong>${completedCount}</strong> 张，当前第 <strong>${taskIndex + 1}</strong> 张失败，剩余 <strong>${remainingCount}</strong> 张未处理（共 ${total} 张）`;
+  }
+  if (failureTaskName) {
+    failureTaskName.textContent = `第 ${taskIndex + 1} 项: ${taskDisplayName}`;
+  }
+  if (failureErrorReason) {
+    const raw = String(errorMsg || '未知异常');
+    if (raw.includes('PUBLIC_ERROR_PER_MODEL_DAILY_QUOTA_REACHED')) {
+      failureErrorReason.innerHTML = `
+        <div class="error-badge-row">
+          <span class="err-tag">接口: SPrCad (2K超清放大)</span>
+          <span class="err-tag">状态码: 8 (资源/配额用尽)</span>
+        </div>
+        <div class="error-detail-msg">详细原因: <strong>PUBLIC_ERROR_PER_MODEL_DAILY_QUOTA_REACHED</strong>（单模型单日调用配额已用完）</div>
+        <div class="error-raw-msg">原始响应: ${escapeHtml(raw)}</div>
+      `;
+    } else if (raw.includes('PUBLIC_ERROR_UNUSUAL_ACTIVITY')) {
+      failureErrorReason.innerHTML = `
+        <div class="error-badge-row">
+          <span class="err-tag">风控拦截: 频率过高</span>
+        </div>
+        <div class="error-detail-msg">详细原因: <strong>PUBLIC_ERROR_UNUSUAL_ACTIVITY</strong>（检测到短时间内频繁请求）</div>
+        <div class="error-raw-msg">原始响应: ${escapeHtml(raw)}</div>
+      `;
+    } else if (raw.includes('401') || raw.includes('UNAUTHENTICATED')) {
+      failureErrorReason.innerHTML = `
+        <div class="error-badge-row">
+          <span class="err-tag">鉴权失败: 401 UNAUTHENTICATED</span>
+        </div>
+        <div class="error-detail-msg">详细原因: Google Flow 登录令牌或会话已失效</div>
+        <div class="error-raw-msg">原始响应: ${escapeHtml(raw)}</div>
+      `;
+    } else {
+      failureErrorReason.innerHTML = `
+        <div class="error-detail-msg">${escapeHtml(raw)}</div>
+      `;
+    }
+  }
+
+  if (failureDiagnosticHint) {
+    let hintHtml = '';
+    const msg = String(errorMsg || '');
+    if (msg.includes('PUBLIC_ERROR_PER_MODEL_DAILY_QUOTA_REACHED')) {
+      hintHtml = '<strong>💡 诊断建议：</strong>Google Flow 账号针对当前 AI 模型或 2K 放大的“单日调用配额已用完”！建议将分辨率切换为 1K，然后点击“重试该任务”。';
+    } else if (msg.includes('PUBLIC_ERROR_UNUSUAL_ACTIVITY')) {
+      hintHtml = '<strong>💡 诊断建议：</strong>Google Flow 检测到频繁活动，建议在左侧将“任务间冷却间隔”调大至 10~20秒 或 20~30秒，稍等 1-2 分钟后再重试。';
+    } else if (msg.includes('401') || msg.includes('403') || msg.includes('UNAUTHENTICATED')) {
+      hintHtml = '<strong>💡 诊断建议：</strong>登录会话已过期，请在浏览器中按 F5 刷新一次 Google Flow 页面后再点击重试。';
+    } else if (msg.includes('RESOURCE_EXHAUSTED')) {
+      hintHtml = '<strong>💡 诊断建议：</strong>接口请求频率过高或配额达到上限，建议调大冷却时间或换账号测试。';
+    }
+
+    if (hintHtml) {
+      failureDiagnosticHint.innerHTML = hintHtml;
+      failureDiagnosticHint.hidden = false;
+    } else {
+      failureDiagnosticHint.hidden = true;
+    }
+  }
+
+  failureStopDialog.showModal();
 }
 
 // ============================================================================
@@ -2361,6 +2624,25 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
           logAction('QUEUE', '关键响应暂停', `检测到关键响应 (${msg})，队列已自动暂停以保护账号额度`);
           queueLiveStepText.textContent = `检测到关键响应 (${msg})，队列已自动暂停以保护账号额度。`;
           renderTaskList();
+
+          if (!appState.cancelRequested) {
+            if (chkNotifyAudio?.checked) playAudioAlert();
+            if (chkNotifyDesktop?.checked) {
+              showDesktopNotification(
+                '⚠️ Antigravity 关键响应暂停',
+                `任务 [${getTaskDisplayName(task)}] 异常：${msg}\n队列已自动暂停中断。`
+              );
+            }
+            const completedCount = appState.tasks.filter((t) => t.status === 'COMPLETED').length;
+            dispatchFailurePushNotification({
+              taskName: getTaskDisplayName(task),
+              taskIndex: i,
+              totalTasks: appState.tasks.length,
+              completedCount,
+              errorMsg: msg
+            });
+            showFailureStopModal(task, i, msg);
+          }
           return;
         }
 
@@ -2371,6 +2653,32 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
           await saveTaskToDb(task, i);
           renderTaskList();
           logAction('ERROR', '单张处理失败', `[${getTaskDisplayName(task)}] 失败: ${msg}`);
+
+          if (isStopOnFailureEnabled()) {
+            appState.queueStatus = 'PAUSED';
+            stopQueueTimer();
+            logAction('QUEUE', '遇失败立即停止', `[${getTaskDisplayName(task)}] 失败，已自动暂停中断队列以保护账号`);
+            queueLiveStepText.textContent = `[${getTaskDisplayName(task)}] 处理失败，队列已立即自动暂停中断！`;
+            renderTaskList();
+
+            if (chkNotifyAudio?.checked) playAudioAlert();
+            if (chkNotifyDesktop?.checked) {
+              showDesktopNotification(
+                '⚠️ Antigravity 任务失败暂停提醒',
+                `任务 [${getTaskDisplayName(task)}] 失败：${msg}\n队列已自动暂停中断。`
+              );
+            }
+            const completedCount = appState.tasks.filter((t) => t.status === 'COMPLETED').length;
+            dispatchFailurePushNotification({
+              taskName: getTaskDisplayName(task),
+              taskIndex: i,
+              totalTasks: appState.tasks.length,
+              completedCount,
+              errorMsg: msg
+            });
+            showFailureStopModal(task, i, msg);
+            return;
+          }
         }
       }
     }
@@ -2463,7 +2771,13 @@ async function initWorkbench() {
     selectedDelay,
     selectedMaxRetries,
     overwriteOriginal,
-    numericNameOnly
+    numericNameOnly,
+    stopOnFailure,
+    notifyAudio,
+    audioSoundPreset,
+    notifyDesktop,
+    notifyChannel,
+    notifyToken
   } = await chrome.storage.local.get([
     'userPrompt',
     'selectedModel',
@@ -2473,7 +2787,13 @@ async function initWorkbench() {
     'selectedDelay',
     'selectedMaxRetries',
     'overwriteOriginal',
-    'numericNameOnly'
+    'numericNameOnly',
+    'stopOnFailure',
+    'notifyAudio',
+    'audioSoundPreset',
+    'notifyDesktop',
+    'notifyChannel',
+    'notifyToken'
   ]);
 
   promptTextarea.value = userPrompt || DEFAULT_ECOMMERCE_PROMPT;
@@ -2512,6 +2832,130 @@ async function initWorkbench() {
       }
       renderTaskList();
       updateDirStatusBanner();
+    });
+  }
+
+  if (chkStopOnFailure) {
+    chkStopOnFailure.checked = stopOnFailure !== undefined ? Boolean(stopOnFailure) : true;
+    chkStopOnFailure.addEventListener('change', () => {
+      chrome.storage.local.set({ stopOnFailure: chkStopOnFailure.checked });
+    });
+  }
+
+  if (chkNotifyAudio) {
+    chkNotifyAudio.checked = notifyAudio !== undefined ? Boolean(notifyAudio) : true;
+    chkNotifyAudio.addEventListener('change', () => {
+      chrome.storage.local.set({ notifyAudio: chkNotifyAudio.checked });
+    });
+  }
+
+  if (selectAudioPreset) {
+    const VALID_PRESETS = new Set(['classic', 'dingdong', 'urgent', 'radar', 'marimba']);
+    selectAudioPreset.value = VALID_PRESETS.has(audioSoundPreset) ? audioSoundPreset : 'classic';
+    selectAudioPreset.addEventListener('change', () => {
+      chrome.storage.local.set({ audioSoundPreset: selectAudioPreset.value });
+      playAudioAlert(selectAudioPreset.value);
+    });
+  }
+
+  if (btnPreviewAudio) {
+    btnPreviewAudio.addEventListener('click', () => {
+      playAudioAlert(selectAudioPreset?.value || 'classic');
+    });
+  }
+
+  if (chkNotifyDesktop) {
+    chkNotifyDesktop.checked = notifyDesktop !== undefined ? Boolean(notifyDesktop) : true;
+    chkNotifyDesktop.addEventListener('change', () => {
+      chrome.storage.local.set({ notifyDesktop: chkNotifyDesktop.checked });
+    });
+  }
+
+  if (selectNotifyChannel) {
+    selectNotifyChannel.value = notifyChannel || 'CUSTOM_WEBHOOK';
+    const updateChannelUI = () => {
+      const ch = selectNotifyChannel.value;
+      if (ch === 'NONE') {
+        if (notifyTokenGroup) notifyTokenGroup.hidden = true;
+      } else {
+        if (notifyTokenGroup) notifyTokenGroup.hidden = false;
+        if (notifyTokenLabel) {
+          notifyTokenLabel.textContent = '企业微信 / 钉钉 / 飞书 群机器人 Webhook 地址';
+          if (inputNotifyToken) {
+            inputNotifyToken.placeholder = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...';
+          }
+        }
+      }
+    };
+    updateChannelUI();
+    selectNotifyChannel.addEventListener('change', () => {
+      updateChannelUI();
+      chrome.storage.local.set({ notifyChannel: selectNotifyChannel.value });
+    });
+  }
+
+  if (inputNotifyToken) {
+    inputNotifyToken.value = notifyToken || '';
+    inputNotifyToken.addEventListener('input', () => {
+      chrome.storage.local.set({ notifyToken: inputNotifyToken.value.trim() });
+    });
+  }
+
+  if (btnTestNotify) {
+    btnTestNotify.addEventListener('click', async () => {
+      const channel = selectNotifyChannel?.value || 'NONE';
+      const token = inputNotifyToken?.value?.trim() || '';
+      if (channel === 'NONE') {
+        alert('请先将通知渠道选择为“自定义 Webhook”并填入 Webhook 地址');
+        return;
+      }
+      if (!token) {
+        alert('请先填入群机器人的 Webhook 地址（如企业微信群机器人 Webhook URL）');
+        return;
+      }
+      btnTestNotify.disabled = true;
+      btnTestNotify.textContent = '正在发送...';
+      const res = await dispatchFailurePushNotification({
+        taskName: '测试商品图.png',
+        taskIndex: 0,
+        totalTasks: 1,
+        completedCount: 0,
+        errorMsg: '这是一条由 Antigravity 插件发出的连通性测试消息',
+        isTest: true
+      });
+      btnTestNotify.disabled = false;
+      btnTestNotify.textContent = '发送测试通知';
+      if (res && res.success) {
+        alert('✅ 测试通知发送成功！请检查您的微信或 Webhook 是否收到通知卡片。');
+      } else {
+        alert(`❌ 发送失败：${(res && res.reason) || '网络或接口异常'}`);
+      }
+    });
+  }
+
+  if (btnFailureRetryCurrent) {
+    btnFailureRetryCurrent.addEventListener('click', async () => {
+      if (typeof failureStopDialog.close === 'function') {
+        failureStopDialog.close();
+      }
+      if (currentModalFailedTask) {
+        currentModalFailedTask.status = 'PENDING';
+        currentModalFailedTask.errorMsg = null;
+        await saveTaskToDb(currentModalFailedTask, currentModalTaskIndex);
+        renderTaskList();
+        logAction('QUEUE', '重试当前失败任务', `准备重试任务: [${getTaskDisplayName(currentModalFailedTask)}]`);
+        startQueueLoop({ sampleLimit: null });
+      }
+    });
+  }
+
+  if (btnFailureSkipAndResume) {
+    btnFailureSkipAndResume.addEventListener('click', () => {
+      if (typeof failureStopDialog.close === 'function') {
+        failureStopDialog.close();
+      }
+      logAction('QUEUE', '跳过失败继续队列', `跳过任务: [${getTaskDisplayName(currentModalFailedTask)}]，继续执行后续未处理队列`);
+      startQueueLoop({ sampleLimit: null });
     });
   }
 
@@ -3097,7 +3541,13 @@ async function initWorkbench() {
       selectedResolution: selectResolution.value,
       selectedAspect: selectAspect.value,
       selectedDelay: selectDelay.value,
-      selectedMaxRetries: selectMaxRetries.value
+      selectedMaxRetries: selectMaxRetries.value,
+      notifyChannel: selectNotifyChannel?.value || 'CUSTOM_WEBHOOK',
+      notifyToken: inputNotifyToken?.value?.trim() || '',
+      notifyAudio: chkNotifyAudio ? chkNotifyAudio.checked : true,
+      audioSoundPreset: selectAudioPreset?.value || 'classic',
+      notifyDesktop: chkNotifyDesktop ? chkNotifyDesktop.checked : true,
+      stopOnFailure: chkStopOnFailure ? chkStopOnFailure.checked : true
     });
     configSavedHint.textContent = '配置已保存！';
     setTimeout(() => {

@@ -13,7 +13,7 @@
     <div class="brand">
       <img src="../icons/icon-48.png" alt="Logo" class="brand-logo" width="32" height="32">
       <div>
-        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.14</span></h1>
+        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.19</span></h1>
         <p class="subtitle">Google Flow 批量电商产品图增强工作台</p>
       </div>
     </div>
@@ -42,7 +42,7 @@
         <div>
           <h2 id="sectionMvpTitle">批量商品图导入与自动化图生图队列</h2>
           <p class="card-desc">
-            每张原图独立执行：<strong>① 上传参考原图 → ② AI 图生图增强 → ③ 2K / 4K 超分放大 → ④ 自动落盘保存</strong>。支持断点恢复，已完成任务不会重复提交。
+            每张原图独立执行：<strong>① 上传参考原图 → ② AI 图生图增强 → ③ 2K(需要Pro会员) / 4K(需要Ultra会员) 超分放大 → ④ 自动落盘保存</strong>。支持断点恢复，已完成任务不会重复提交。
           </p>
         </div>
         <span id="queueStateBadge" class="status-pill status-ok">队列空闲就绪</span>
@@ -122,6 +122,10 @@
             <label class="toolbar-checkbox-pill" title="勾选后仅扫描并处理文件名为纯数字的图片（如 1.png、2.jpg、10.webp）">
               <input id="chkNumericNameOnly" type="checkbox" checked>
               <span>只处理纯数字图片 (如 1.png)</span>
+            </label>
+            <label class="toolbar-checkbox-pill" title="勾选后（默认）：一旦队列中有单张图片处理失败，立即自动暂停队列并弹出提醒框，支持声音/桌面/微信通知">
+              <input id="chkStopOnFailure" type="checkbox" checked>
+              <span>有任务失败立即停止</span>
             </label>
             <input id="fileInputFallback" type="file" accept=".jpg,.jpeg,.png,.webp" multiple hidden>
           </div>
@@ -222,6 +226,54 @@
                   <option value="1">失败重试 1 次</option>
                   <option value="2">失败重试 2 次</option>
                 </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- 异常通知与微信推送配置常驻面板 -->
+          <div id="notifyCard" class="notify-card">
+            <div class="notify-card-header">
+              <span>🔔 异常通知与微信消息推送设置（遇失败立即提醒）</span>
+            </div>
+            <div class="notify-body">
+              <div class="notify-sound-row">
+                <div class="notify-row-checks">
+                  <label class="toolbar-checkbox-pill" title="遇错误立即在电脑中播放警报声音">
+                    <input id="chkNotifyAudio" type="checkbox" checked>
+                    <span>🔊 声音警报</span>
+                  </label>
+                  <label class="toolbar-checkbox-pill" title="遇错误通过 Windows 系统桌面右下角弹出横幅通知">
+                    <input id="chkNotifyDesktop" type="checkbox" checked>
+                    <span>🖥️ Windows 桌面通知</span>
+                  </label>
+                </div>
+                <div class="notify-sound-picker">
+                  <label for="selectAudioPreset" class="notify-sound-label">警报音效：</label>
+                  <select id="selectAudioPreset" class="select-sound-preset">
+                    <option value="classic" selected>经典蜂鸣三音 (明快清晰)</option>
+                    <option value="dingdong">门铃叮咚 (柔和悦耳)</option>
+                    <option value="urgent">急促警笛 (隔空穿透)</option>
+                    <option value="radar">科技雷达滴滴 (数码质感)</option>
+                    <option value="marimba">马林巴琴音 (轻松优美)</option>
+                  </select>
+                  <button id="btnPreviewAudio" type="button" class="btn btn-secondary btn-mini" title="点击立即试听该声音">🔊 试听</button>
+                </div>
+              </div>
+              <div class="form-row notify-channel-row">
+                <div class="form-group">
+                  <label for="selectNotifyChannel">微信通知渠道</label>
+                  <select id="selectNotifyChannel">
+                    <option value="CUSTOM_WEBHOOK" selected>自定义 Webhook (企业微信/钉钉/飞书机器人)</option>
+                    <option value="NONE">不启用外部推送 (仅桌面与声音提醒)</option>
+                  </select>
+                </div>
+                <div class="form-group" id="notifyTokenGroup">
+                  <label id="notifyTokenLabel" for="inputNotifyToken">企业微信 / 钉钉 / 飞书 群机器人 Webhook 地址</label>
+                  <div class="input-with-button">
+                    <input id="inputNotifyToken" type="text" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
+                    <button id="btnTestNotify" type="button" class="btn btn-secondary btn-mini">发送测试通知</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -392,7 +444,57 @@
     </div>
   </dialog>
 
-  <!-- 3. 队列完成恭喜统计提示框 (遵循 modern-web-guidance light-dismiss-a-dialog) -->
+  <!-- 3. 任务失败中断提醒弹窗 (遵循 modern-web-guidance light-dismiss-a-dialog) -->
+  <dialog id="failureStopDialog" closedby="any" aria-labelledby="failureStopDialogTitle" class="failure-stop-dialog">
+    <div class="dialog-inner failure-dialog-inner">
+      <div class="dialog-header">
+        <div class="dialog-title-group">
+          <h3 id="failureStopDialogTitle">⚠️ 检测到任务失败，队列已立即暂停</h3>
+          <span class="badge badge-danger">已暂停中断</span>
+        </div>
+        <form method="dialog">
+          <button type="submit" class="btn btn-secondary btn-mini">关闭 (Esc)</button>
+        </form>
+      </div>
+
+      <div class="failure-dialog-body">
+        <div class="failure-alert-banner">
+          已开启“遇失败立即停止”，检测到单张图片处理异常，系统已立即中断队列以保护账号与配额！
+        </div>
+
+        <div class="failure-progress-box">
+          <div class="failure-progress-title">📊 当前执行进度：</div>
+          <div id="failureProgressText" class="failure-progress-content">
+            已成功完成 <strong>0</strong> 张，当前第 <strong>0</strong> 张失败，剩余 <strong>0</strong> 张未处理
+          </div>
+        </div>
+
+        <div class="failure-detail-card">
+          <div class="failure-detail-row">
+            <span class="failure-detail-label">异常任务：</span>
+            <strong id="failureTaskName" class="failure-task-name">-</strong>
+          </div>
+          <div class="failure-detail-row">
+            <span class="failure-detail-label">失败原因：</span>
+            <div id="failureErrorReason" class="failure-error-reason">-</div>
+          </div>
+          <div id="failureDiagnosticHint" class="failure-diagnostic-hint" hidden>
+            <!-- 诊断智能建议 -->
+          </div>
+        </div>
+      </div>
+
+      <div class="dialog-footer failure-dialog-footer">
+        <button id="btnFailureRetryCurrent" type="button" class="btn btn-primary">重试该任务</button>
+        <button id="btnFailureSkipAndResume" type="button" class="btn btn-secondary">跳过该任务，继续后续队列</button>
+        <form method="dialog">
+          <button type="submit" class="btn btn-secondary">知道了，保持暂停排查</button>
+        </form>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 4. 队列完成恭喜统计提示框 (遵循 modern-web-guidance light-dismiss-a-dialog) -->
   <dialog id="completionDialog" closedby="any" aria-labelledby="completionDialogTitle">
     <div class="dialog-inner completion-dialog-inner">
       <div class="dialog-header">
