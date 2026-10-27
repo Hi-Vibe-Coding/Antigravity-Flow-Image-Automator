@@ -13,7 +13,7 @@
     <div class="brand">
       <img src="../icons/icon-48.png" alt="Logo" class="brand-logo" width="32" height="32">
       <div>
-        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.13</span></h1>
+        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.14</span></h1>
         <p class="subtitle">Google Flow 批量电商产品图增强工作台</p>
       </div>
     </div>
@@ -92,7 +92,7 @@
             <button id="btnPauseQueue" type="button" class="btn btn-secondary" disabled>暂停</button>
             <button id="btnResumeQueue" type="button" class="btn btn-primary" hidden>继续队列</button>
             <button id="btnCancelQueue" type="button" class="btn btn-danger" disabled>取消</button>
-            <button id="btnRetryFailed" type="button" class="btn btn-secondary" hidden>重试失败项</button>
+            <button id="btnRetryFailed" type="button" class="btn btn-retry-failed" hidden>重试失败的任务</button>
             <button id="btnExportTaskLog" type="button" class="btn btn-secondary" hidden>导出任务记录</button>
           </div>
         </div>
@@ -415,6 +415,7 @@
         </div>
       </div>
       <div class="dialog-footer">
+        <button id="btnDialogRetryFailed" type="button" class="btn btn-retry-failed" hidden>立即重试失败任务</button>
         <form method="dialog">
           <button type="submit" class="btn btn-primary">太棒了，我知道了</button>
         </form>

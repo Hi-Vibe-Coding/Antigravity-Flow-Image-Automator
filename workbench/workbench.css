@@ -966,6 +966,30 @@ dialog::backdrop {
   border-color: rgba(239, 68, 68, 0.35);
 }
 
+.btn-retry-failed {
+  background-color: rgba(245, 158, 11, 0.16);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.45);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s ease;
+}
+
+.btn-retry-failed:hover:not(:disabled) {
+  background-color: rgba(245, 158, 11, 0.28);
+  border-color: #f59e0b;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.btn-retry-failed:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .queue-control-bar {
   display: flex;
   align-items: center;

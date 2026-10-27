@@ -1442,6 +1442,18 @@ function updateQueueStatsUI() {
   btnCancelQueue.disabled = !isRunning && !isPaused;
   btnResumeQueue.hidden = !isPaused;
 
+  if (btnRetryFailed) {
+    if (failed > 0) {
+      btnRetryFailed.hidden = false;
+      btnRetryFailed.disabled = isRunning;
+      btnRetryFailed.textContent = `重试失败的任务 (${failed})`;
+      btnRetryFailed.title = `重新将这 ${failed} 个失败任务加入队列并立即执行`;
+    } else {
+      btnRetryFailed.hidden = true;
+      btnRetryFailed.disabled = true;
+    }
+  }
+
   if (isRunning) {
     queueStateBadge.textContent = '队列执行中...';
     queueStateBadge.className = 'status-pill status-warn';
@@ -2265,16 +2277,21 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
     return;
   }
 
+  const isResuming = appState.queueStatus === 'PAUSED';
   appState.queueStatus = 'RUNNING';
   appState.pauseRequested = false;
   appState.cancelRequested = false;
   renderTaskList();
 
   const queueRunStartTime = Date.now();
-  startQueueTimer();
+  if (isResuming && queueTimerAccumulatedMs > 0) {
+    resumeQueueTimer();
+  } else {
+    startQueueTimer();
+  }
   logAction(
     'QUEUE',
-    '开始全部队列',
+    isResuming ? '恢复队列执行' : '开始队列',
     `启动批量图生图队列，共 ${pendingTasks.length} 个待处理任务 (AI模型: ${selectModel.value}, 分辨率: ${selectResolution.value})`
   );
 
@@ -2413,6 +2430,21 @@ function showQueueCompletionModal({ successCount, failedCount, totalDurationMs, 
   }
   if (completionAvgTime) {
     completionAvgTime.textContent = formatDurationChinese(avgDurationMs);
+  }
+  const btnDialogRetryFailed = document.getElementById('btnDialogRetryFailed');
+  if (btnDialogRetryFailed) {
+    if (failedCount > 0) {
+      btnDialogRetryFailed.hidden = false;
+      btnDialogRetryFailed.textContent = `立即重试失败任务 (${failedCount})`;
+      btnDialogRetryFailed.onclick = () => {
+        if (typeof completionDialog.close === 'function') {
+          completionDialog.close();
+        }
+        if (btnRetryFailed) btnRetryFailed.click();
+      };
+    } else {
+      btnDialogRetryFailed.hidden = true;
+    }
   }
   completionDialog.showModal();
 }
@@ -2731,6 +2763,8 @@ async function initWorkbench() {
     }
     renderTaskList();
     if (count > 0) {
+      logAction('QUEUE', '重试失败任务', `已将 ${count} 个失败任务重置为待处理并重新启动队列`);
+      queueLiveStepText.textContent = `已将 ${count} 个失败任务重置为待处理，正在启动重试...`;
       startQueueLoop({ sampleLimit: null });
     } else {
       alert('当前没有失败或已取消的任务需要重试。');
