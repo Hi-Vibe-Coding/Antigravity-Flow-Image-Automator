@@ -2195,10 +2195,10 @@ async function executeSingleTaskPipeline(task, taskIndex) {
 // ============================================================================
 
 function parseDelayRangeMs() {
-  const val = selectDelay.value || '2000-4500';
+  const val = selectDelay.value || '3000-5000';
   const [minStr, maxStr] = val.split('-');
-  const min = Number(minStr) || 2000;
-  const max = Number(maxStr) || 4500;
+  const min = Number(minStr) || 3000;
+  const max = Number(maxStr) || 5000;
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
@@ -2499,7 +2499,8 @@ async function initWorkbench() {
         : '0';
   }
 
-  if (selectedDelay) selectDelay.value = selectedDelay;
+  const VALID_DELAYS = new Set(['3000-5000', '10000-20000', '20000-30000', '30000-40000']);
+  selectDelay.value = VALID_DELAYS.has(selectedDelay) ? selectedDelay : '3000-5000';
 
   selectModel.addEventListener('change', () => {
     chrome.storage.local.set({ selectedModel: selectModel.value });

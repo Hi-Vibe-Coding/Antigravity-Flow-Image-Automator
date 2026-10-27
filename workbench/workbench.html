@@ -13,7 +13,7 @@
     <div class="brand">
       <img src="../icons/icon-48.png" alt="Logo" class="brand-logo" width="32" height="32">
       <div>
-        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.11</span></h1>
+        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.12</span></h1>
         <p class="subtitle">Google Flow 批量电商产品图增强工作台</p>
       </div>
     </div>
@@ -212,9 +212,10 @@
               <label for="selectDelay">任务间冷却间隔 &amp; 自动重试</label>
               <div class="inline-selects">
                 <select id="selectDelay" title="任务间随机冷却时间">
-                  <option value="2000-4500">间隔 2~4.5 秒 (推荐)</option>
-                  <option value="4000-8000">间隔 4~8 秒 (稳健防限流)</option>
-                  <option value="1000-2000">间隔 1~2 秒 (快速)</option>
+                  <option value="3000-5000" selected>3~5秒</option>
+                  <option value="10000-20000">10~20秒</option>
+                  <option value="20000-30000">20~30秒</option>
+                  <option value="30000-40000">30~40秒</option>
                 </select>
                 <select id="selectMaxRetries" title="单张失败自动重试次数">
                   <option value="0" selected>不自动重试</option>
