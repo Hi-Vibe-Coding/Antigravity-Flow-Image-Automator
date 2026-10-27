@@ -245,6 +245,11 @@ function formatActionTimestamp(dateOrTs) {
   return `${year}年${month}月${day}日 ${hours}:${minutes}:${seconds}`;
 }
 
+function getTaskDisplayName(task) {
+  if (!task) return '未命名任务';
+  return task.relativePath || task.name || '未命名图片';
+}
+
 function logAction(category, title, detail = '') {
   const now = new Date();
   const timeStr = formatActionTimestamp(now);
@@ -1059,6 +1064,7 @@ async function extractFoldersFromDataTransfer(dataTransfer) {
 
 async function scanDirectoryHandleForImages(rootDirHandle, onProgress = null) {
   const results = [];
+  const rootFolderName = (rootDirHandle && rootDirHandle.name) || '';
   async function walkDir(currentDirHandle, relPrefix = '') {
     const entries = [];
     for await (const entry of currentDirHandle.values()) {
@@ -1081,12 +1087,13 @@ async function scanDirectoryHandleForImages(rootDirHandle, onProgress = null) {
       }
     }
   }
-  await walkDir(rootDirHandle, '');
+  await walkDir(rootDirHandle, rootFolderName);
   return results;
 }
 
 async function scanDirectoryEntryForImages(dirEntry, onProgress = null) {
   const results = [];
+  const rootFolderName = (dirEntry && dirEntry.name) || '';
   async function walk(entry, relPrefix = '') {
     if (entry.isFile) {
       if (isSupportedImageFile(entry.name)) {
@@ -1118,7 +1125,7 @@ async function scanDirectoryEntryForImages(dirEntry, onProgress = null) {
       await readBatch();
     }
   }
-  await walk(dirEntry, '');
+  await walk(dirEntry, rootFolderName);
   return results;
 }
 
@@ -1510,6 +1517,7 @@ function renderTaskList() {
     const nameEl = document.createElement('div');
     nameEl.className = 'task-name';
     nameEl.textContent = `${index + 1}. ${task.relativePath || task.name}`;
+    nameEl.title = `相对路径: ${task.relativePath || task.name}`;
 
     const subEl = document.createElement('div');
     subEl.className = 'task-sub';
@@ -1521,14 +1529,15 @@ function renderTaskList() {
 
     const sizeKb = (task.size / 1024).toFixed(1);
     const outName = buildOutputFileName(task.name, selectResolution.value, 'image/jpeg');
+    const folderTag = task.sourceDirHandle?.name ? `[📁 ${task.sourceDirHandle.name}] ` : '';
     let overwriteDesc;
     if (isOverwriteModeEnabled()) {
       overwriteDesc =
         task.name.toLowerCase() !== outName.toLowerCase()
-          ? `替换为: ${outName} (删除 ${task.name})`
-          : `直接覆盖: ${outName}`;
+          ? `${folderTag}替换为: ${outName} (删除 ${task.name})`
+          : `${folderTag}直接覆盖: ${outName}`;
     } else {
-      overwriteDesc = `保留原图，同路径输出: ${outName}`;
+      overwriteDesc = `${folderTag}保留原图，同路径输出: ${outName}`;
     }
     let detailStr = `${sizeKb} KB | ${overwriteDesc}`;
     if (task.modelUsed) detailStr += ` | 模型: ${task.modelUsed}`;
@@ -1809,7 +1818,7 @@ if (chkSyncFromEnhanced) {
 }
 
 function openBeforeAfterModal(task) {
-  previewDialogTitle.textContent = `原图 vs 增强结果对比 — ${task.name}`;
+  previewDialogTitle.textContent = `原图 vs 增强结果对比 — ${getTaskDisplayName(task)}`;
   const dims = task.enhancedDimensions
     ? `${task.enhancedDimensions[0]}×${task.enhancedDimensions[1]}px`
     : task.resolutionUsed || '2K';
@@ -2008,6 +2017,7 @@ async function sendFlowCommand(command, payload, timeoutMs = 180000) {
  */
 async function executeSingleTaskPipeline(task, taskIndex) {
   const startTime = Date.now();
+  const displayName = getTaskDisplayName(task);
   const promptText = promptTextarea.value.trim();
   const selectedModelVal = selectModel.value;
   const selectedResolutionVal = selectResolution.value; // '2K' | '1K'
@@ -2020,10 +2030,10 @@ async function executeSingleTaskPipeline(task, taskIndex) {
   // Step 1: Upload Reference Image (maseQ + ngNC2 + as29s readiness check)
   task.status = 'UPLOADING';
   task.errorMsg = null;
-  queueLiveStepText.textContent = `[${taskIndex + 1}/${appState.tasks.length}] 正在上传并校验参考原图: ${task.name} (maseQ)...`;
+  queueLiveStepText.textContent = `[${taskIndex + 1}/${appState.tasks.length}] 正在上传并校验参考原图: ${displayName} (maseQ)...`;
   renderTaskList();
   await saveTaskToDb(task, taskIndex);
-  logAction('PROCESS', '上传参考原图', `[${task.name}] 正在上传参考原图至 Google Flow (maseQ)...`);
+  logAction('PROCESS', '上传参考原图', `[${displayName}] 正在上传参考原图至 Google Flow (maseQ)...`);
 
   const uniqueUpload = await blobToUniqueUploadBase64(
     task.sourceBlob,
@@ -2052,7 +2062,7 @@ async function executeSingleTaskPipeline(task, taskIndex) {
   )}...)，正在调用 ${selectedModelVal} 执行图生图 (ogiZ0b)...`;
   renderTaskList();
   await saveTaskToDb(task, taskIndex);
-  logAction('PROCESS', 'AI图生图增强', `[${task.name}] 正在调用 ${selectedModelVal} 生成增强图像 (ogiZ0b)...`);
+  logAction('PROCESS', 'AI图生图增强', `[${displayName}] 正在调用 ${selectedModelVal} 生成增强图像 (ogiZ0b)...`);
 
   let genRes = null;
   try {
@@ -2119,7 +2129,7 @@ async function executeSingleTaskPipeline(task, taskIndex) {
     logAction(
       'PROCESS',
       '超清放大导出',
-      `[${task.name}] 正在执行 ${selectedResolutionVal} 超分放大 (SPrCad)...`
+      `[${displayName}] 正在执行 ${selectedResolutionVal} 超分放大 (SPrCad)...`
     );
 
     const upscaleRes = await sendFlowCommand('EXECUTE_UPSCALE_IMAGE', {
@@ -2186,7 +2196,7 @@ async function executeSingleTaskPipeline(task, taskIndex) {
   logAction(
     'COMPLETE',
     '完成单张图片',
-    `[${task.name}] 成功保存为 ${outputFileName} (耗时: ${(task.durationMs / 1000).toFixed(1)}s)`
+    `[${displayName}] 成功保存为 ${outputFileName} (耗时: ${(task.durationMs / 1000).toFixed(1)}s)`
   );
 }
 
@@ -2221,12 +2231,12 @@ async function runSingleTaskStandalone(task) {
 
   try {
     await executeSingleTaskPipeline(task, idx >= 0 ? idx : 0);
-    queueLiveStepText.textContent = `单张任务 [${task.name}] 执行成功！已保存为 ${task.outputFileName}。`;
+    queueLiveStepText.textContent = `单张任务 [${getTaskDisplayName(task)}] 执行成功！已保存为 ${task.outputFileName}。`;
   } catch (err) {
     task.status = 'FAILED';
     task.errorMsg = err.message || String(err);
     await saveTaskToDb(task, idx >= 0 ? idx : 0);
-    queueLiveStepText.textContent = `单张任务 [${task.name}] 失败: ${task.errorMsg}`;
+    queueLiveStepText.textContent = `单张任务 [${getTaskDisplayName(task)}] 失败: ${task.errorMsg}`;
   } finally {
     appState.queueStatus = 'IDLE';
     renderTaskList();
@@ -2304,7 +2314,7 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
           const backoffMs = isUnusualActivity
             ? 20000
             : Math.min(3000 * Math.pow(2, attempt - 1), 12000);
-          queueLiveStepText.textContent = `[${task.name}] 第 ${attempt} 次自动重试前冷却等待 ${(
+          queueLiveStepText.textContent = `[${getTaskDisplayName(task)}] 第 ${attempt} 次自动重试前冷却等待 ${(
             backoffMs / 1000
           ).toFixed(1)} 秒...`;
           await sleepMs(backoffMs);
@@ -2343,7 +2353,7 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
           failedInThisRun++;
           await saveTaskToDb(task, i);
           renderTaskList();
-          logAction('ERROR', '单张处理失败', `[${task.name}] 失败: ${msg}`);
+          logAction('ERROR', '单张处理失败', `[${getTaskDisplayName(task)}] 失败: ${msg}`);
         }
       }
     }
@@ -2362,7 +2372,7 @@ async function startQueueLoop({ sampleLimit = null } = {}) {
     const hasMorePending = appState.tasks.slice(i + 1).some((t) => t.status === 'PENDING');
     if (hasMorePending && !appState.pauseRequested && !appState.cancelRequested) {
       const delayMs = parseDelayRangeMs();
-      queueLiveStepText.textContent = `已完成 [${task.name}]，冷却等待 ${(delayMs / 1000).toFixed(
+      queueLiveStepText.textContent = `已完成 [${getTaskDisplayName(task)}]，冷却等待 ${(delayMs / 1000).toFixed(
         1
       )} 秒后执行下一张...`;
       await sleepMs(delayMs);
