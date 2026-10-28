@@ -4,7 +4,7 @@
 // Performs ZERO DOM manipulation.
 
 (function () {
-  const RELAY_VERSION = '0.3.19';
+  const RELAY_VERSION = '0.3.20';
   if (window.__ANTIGRAVITY_FLOW_ISOLATED_RELAY_VERSION__ === RELAY_VERSION) return;
   window.__ANTIGRAVITY_FLOW_ISOLATED_RELAY_VERSION__ = RELAY_VERSION;
 
