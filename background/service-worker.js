@@ -3,7 +3,7 @@
 
 const WORKBENCH_PATH = 'workbench/workbench.html';
 const MAX_CAPTURED_RECORDS = 60;
-const EXPECTED_BRIDGE_VERSION = '0.3.21';
+const EXPECTED_BRIDGE_VERSION = '0.3.22';
 const FLOW_URL_PATTERNS = [
   'https://flow.google.com/*',
   'https://labs.google/fx/*'

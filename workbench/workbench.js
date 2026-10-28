@@ -104,6 +104,7 @@ const btnClearCompleted = document.getElementById('btnClearCompleted');
 const btnClearAllTasks = document.getElementById('btnClearAllTasks');
 const chkOverwriteOriginal = document.getElementById('chkOverwriteOriginal');
 const chkNumericNameOnly = document.getElementById('chkNumericNameOnly');
+const chkFilterSub2K = document.getElementById('chkFilterSub2K');
 const chkStopOnFailure = document.getElementById('chkStopOnFailure');
 const fileInputFallback = document.getElementById('fileInputFallback');
 const dirStatusText = document.getElementById('dirStatusText');
@@ -840,6 +841,7 @@ async function saveTaskToDb(task, orderIndex = 0) {
       status: task.status,
       sourceBlob: task.sourceBlob || null,
       sourceDirHandle: task.sourceDirHandle || null,
+      sourceDimensions: task.sourceDimensions || null,
       enhancedBlob: task.enhancedBlob || null,
       outputFileName: task.outputFileName || null,
       uploadedMediaId: task.uploadedMediaId || null,
@@ -1181,6 +1183,20 @@ function isOverwriteModeEnabled() {
 
 function isNumericFilterEnabled() {
   return chkNumericNameOnly ? Boolean(chkNumericNameOnly.checked) : true;
+}
+
+function isFilterSub2KEnabled() {
+  return chkFilterSub2K ? Boolean(chkFilterSub2K.checked) : true;
+}
+
+/**
+ * 判断图片是否属于“低于2K”规格：
+ * 规则：图片尺寸中，只要宽或高的像素低于 2048，即属于“低于2K” (返回 true)
+ * 只有当宽和高同时 >= 2048 时，才判定为“已达到或超过2K” (返回 false)
+ */
+function isSub2KDimensions(width, height) {
+  if (!width || !height) return true;
+  return width < 2048 || height < 2048;
 }
 
 function isPureNumericImageName(filename) {
@@ -1721,6 +1737,22 @@ async function addFilesToTaskList(fileList, defaultSourceDirHandle = null, optio
       type: inferMimeType(file.name, file.type)
     });
     const thumbUrl = URL.createObjectURL(sourceBlob);
+
+    let sourceDimensions = null;
+    try {
+      if (typeof createImageBitmap === 'function') {
+        const bmp = await createImageBitmap(sourceBlob);
+        sourceDimensions = [bmp.width, bmp.height];
+        bmp.close();
+      }
+    } catch {
+      sourceDimensions = null;
+    }
+
+    const isBelow2K = sourceDimensions ? isSub2KDimensions(sourceDimensions[0], sourceDimensions[1]) : true;
+    const shouldIgnore = isFilterSub2KEnabled() && sourceDimensions && !isBelow2K;
+    const initialStatus = shouldIgnore ? 'IGNORED' : 'PENDING';
+
     const newTask = {
       id: `task_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       name: file.name,
@@ -1729,10 +1761,11 @@ async function addFilesToTaskList(fileList, defaultSourceDirHandle = null, optio
       mimeType: sourceBlob.type,
       sourceBlob,
       sourceDirHandle: itemDirHandle,
+      sourceDimensions,
       enhancedBlob: null,
       thumbUrl,
       enhancedThumbUrl: '',
-      status: 'PENDING',
+      status: initialStatus,
       outputFileName: buildOutputFileName(file.name, selectResolution.value, 'image/jpeg'),
       uploadedMediaId: null,
       generatedMediaId: null,
@@ -1793,7 +1826,8 @@ const STATUS_LABELS = {
   SAVING: '正在校验并保存...',
   COMPLETED: '已完成',
   FAILED: '失败',
-  CANCELLED: '已取消'
+  CANCELLED: '已取消',
+  IGNORED: '不处理'
 };
 
 function updateQueueStatsUI() {
@@ -1927,22 +1961,30 @@ function renderTaskList() {
       folderName = task.relativePath.split('/')[0];
     }
     const folderTag = folderName ? `[📁 ${folderName}] ` : '';
-    let overwriteDesc;
-    if (isOverwriteModeEnabled()) {
-      overwriteDesc =
-        task.name.toLowerCase() !== outName.toLowerCase()
-          ? `${folderTag}替换为: ${outName} (删除 ${task.name})`
-          : `${folderTag}直接覆盖: ${outName}`;
+    let detailStr;
+    if (task.status === 'IGNORED') {
+      const dimStr = task.sourceDimensions
+        ? `${task.sourceDimensions[0]}×${task.sourceDimensions[1]}px`
+        : '≥2048px';
+      detailStr = `${sizeKb} KB | 尺寸: ${dimStr} (达到或超过2K规格，不执行队列处理)`;
     } else {
-      overwriteDesc = `${folderTag}保留原图，同路径输出: ${outName}`;
+      let overwriteDesc;
+      if (isOverwriteModeEnabled()) {
+        overwriteDesc =
+          task.name.toLowerCase() !== outName.toLowerCase()
+            ? `${folderTag}替换为: ${outName} (删除 ${task.name})`
+            : `${folderTag}直接覆盖: ${outName}`;
+      } else {
+        overwriteDesc = `${folderTag}保留原图，同路径输出: ${outName}`;
+      }
+      detailStr = `${sizeKb} KB | ${overwriteDesc}`;
+      if (task.modelUsed) detailStr += ` | 模型: ${task.modelUsed}`;
+      if (task.enhancedDimensions) {
+        detailStr += ` (${task.enhancedDimensions[0]}×${task.enhancedDimensions[1]})`;
+      }
+      if (task.durationMs) detailStr += ` | 耗时: ${(task.durationMs / 1000).toFixed(1)}s`;
+      if (task.errorMsg) detailStr += ` | 错误: ${task.errorMsg}`;
     }
-    let detailStr = `${sizeKb} KB | ${overwriteDesc}`;
-    if (task.modelUsed) detailStr += ` | 模型: ${task.modelUsed}`;
-    if (task.enhancedDimensions) {
-      detailStr += ` (${task.enhancedDimensions[0]}×${task.enhancedDimensions[1]})`;
-    }
-    if (task.durationMs) detailStr += ` | 耗时: ${(task.durationMs / 1000).toFixed(1)}s`;
-    if (task.errorMsg) detailStr += ` | 错误: ${task.errorMsg}`;
 
     const detailSpan = document.createElement('span');
     detailSpan.textContent = detailStr;
@@ -1955,71 +1997,80 @@ function renderTaskList() {
     const actions = document.createElement('div');
     actions.className = 'task-actions';
 
-    if (task.status === 'COMPLETED' && task.enhancedThumbUrl) {
-      const btnCompare = document.createElement('button');
-      btnCompare.type = 'button';
-      btnCompare.className = 'btn btn-primary btn-mini';
-      btnCompare.textContent = '对比预览';
-      btnCompare.addEventListener('click', () => openBeforeAfterModal(task));
-      actions.appendChild(btnCompare);
+    if (task.status === 'IGNORED') {
+      const btnPreview = document.createElement('button');
+      btnPreview.type = 'button';
+      btnPreview.className = 'btn btn-secondary btn-mini';
+      btnPreview.textContent = '预览原图';
+      btnPreview.title = '查看原图尺寸与画质';
+      btnPreview.addEventListener('click', () => openBeforeAfterModal(task));
+      actions.appendChild(btnPreview);
+    } else {
+      if (task.status === 'COMPLETED' && task.enhancedThumbUrl) {
+        const btnCompare = document.createElement('button');
+        btnCompare.type = 'button';
+        btnCompare.className = 'btn btn-primary btn-mini';
+        btnCompare.textContent = '对比预览';
+        btnCompare.addEventListener('click', () => openBeforeAfterModal(task));
+        actions.appendChild(btnCompare);
+      }
+
+      const btnSingleRun = document.createElement('button');
+      btnSingleRun.type = 'button';
+      btnSingleRun.className = 'btn btn-secondary btn-mini';
+      btnSingleRun.textContent = task.status === 'COMPLETED' ? '重新生成' : '单张执行';
+      btnSingleRun.disabled = appState.queueStatus === 'RUNNING';
+      btnSingleRun.addEventListener('click', async () => {
+        task.status = 'PENDING';
+        task.errorMsg = null;
+        await saveTaskToDb(task, index);
+        renderTaskList();
+        await runSingleTaskStandalone(task);
+      });
+      actions.appendChild(btnSingleRun);
+
+      const btnUp = document.createElement('button');
+      btnUp.type = 'button';
+      btnUp.className = 'btn btn-secondary btn-mini';
+      btnUp.textContent = '↑';
+      btnUp.disabled = index === 0 || appState.queueStatus === 'RUNNING';
+      btnUp.addEventListener('click', async () => {
+        const tmp = appState.tasks[index - 1];
+        appState.tasks[index - 1] = appState.tasks[index];
+        appState.tasks[index] = tmp;
+        await saveAllTasksOrderToDb();
+        renderTaskList();
+      });
+
+      const btnDown = document.createElement('button');
+      btnDown.type = 'button';
+      btnDown.className = 'btn btn-secondary btn-mini';
+      btnDown.textContent = '↓';
+      btnDown.disabled = index === appState.tasks.length - 1 || appState.queueStatus === 'RUNNING';
+      btnDown.addEventListener('click', async () => {
+        const tmp = appState.tasks[index + 1];
+        appState.tasks[index + 1] = appState.tasks[index];
+        appState.tasks[index] = tmp;
+        await saveAllTasksOrderToDb();
+        renderTaskList();
+      });
+
+      const btnDel = document.createElement('button');
+      btnDel.type = 'button';
+      btnDel.className = 'btn btn-secondary btn-mini';
+      btnDel.textContent = '移除';
+      btnDel.disabled = isRunningTask;
+      btnDel.addEventListener('click', async () => {
+        if (task.thumbUrl) URL.revokeObjectURL(task.thumbUrl);
+        if (task.enhancedThumbUrl) URL.revokeObjectURL(task.enhancedThumbUrl);
+        appState.tasks.splice(index, 1);
+        await deleteTaskFromDb(task.id);
+        await saveAllTasksOrderToDb();
+        renderTaskList();
+        updateDirStatusBanner();
+      });
+      actions.append(btnUp, btnDown, btnDel);
     }
-
-    const btnSingleRun = document.createElement('button');
-    btnSingleRun.type = 'button';
-    btnSingleRun.className = 'btn btn-secondary btn-mini';
-    btnSingleRun.textContent = task.status === 'COMPLETED' ? '重新生成' : '单张执行';
-    btnSingleRun.disabled = appState.queueStatus === 'RUNNING';
-    btnSingleRun.addEventListener('click', async () => {
-      task.status = 'PENDING';
-      task.errorMsg = null;
-      await saveTaskToDb(task, index);
-      renderTaskList();
-      await runSingleTaskStandalone(task);
-    });
-    actions.appendChild(btnSingleRun);
-
-    const btnUp = document.createElement('button');
-    btnUp.type = 'button';
-    btnUp.className = 'btn btn-secondary btn-mini';
-    btnUp.textContent = '↑';
-    btnUp.disabled = index === 0 || appState.queueStatus === 'RUNNING';
-    btnUp.addEventListener('click', async () => {
-      const tmp = appState.tasks[index - 1];
-      appState.tasks[index - 1] = appState.tasks[index];
-      appState.tasks[index] = tmp;
-      await saveAllTasksOrderToDb();
-      renderTaskList();
-    });
-
-    const btnDown = document.createElement('button');
-    btnDown.type = 'button';
-    btnDown.className = 'btn btn-secondary btn-mini';
-    btnDown.textContent = '↓';
-    btnDown.disabled = index === appState.tasks.length - 1 || appState.queueStatus === 'RUNNING';
-    btnDown.addEventListener('click', async () => {
-      const tmp = appState.tasks[index + 1];
-      appState.tasks[index + 1] = appState.tasks[index];
-      appState.tasks[index] = tmp;
-      await saveAllTasksOrderToDb();
-      renderTaskList();
-    });
-
-    const btnDel = document.createElement('button');
-    btnDel.type = 'button';
-    btnDel.className = 'btn btn-secondary btn-mini';
-    btnDel.textContent = '移除';
-    btnDel.disabled = isRunningTask;
-    btnDel.addEventListener('click', async () => {
-      if (task.thumbUrl) URL.revokeObjectURL(task.thumbUrl);
-      if (task.enhancedThumbUrl) URL.revokeObjectURL(task.enhancedThumbUrl);
-      appState.tasks.splice(index, 1);
-      await deleteTaskFromDb(task.id);
-      await saveAllTasksOrderToDb();
-      renderTaskList();
-      updateDirStatusBanner();
-    });
-
-    actions.append(btnUp, btnDown, btnDel);
     row.append(left, actions);
     imageTaskList.appendChild(row);
   });
@@ -2215,6 +2266,22 @@ if (chkSyncFromEnhanced) {
 }
 
 function openBeforeAfterModal(task) {
+  if (task.status === 'IGNORED') {
+    previewDialogTitle.textContent = `原图预览 (不处理) — ${getTaskDisplayName(task)}`;
+    const origDims = task.sourceDimensions
+      ? `${task.sourceDimensions[0]}×${task.sourceDimensions[1]}px`
+      : '≥2048px';
+    previewDialogMeta.textContent = `原图尺寸: ${origDims} (已达到或超过2K规格，不执行队列处理) | 文件名: ${task.name}`;
+    previewOrigImg.src = task.thumbUrl;
+    previewEnhancedImg.src = task.thumbUrl;
+    if (chkSyncFromOrig) chkSyncFromOrig.checked = true;
+    if (chkSyncFromEnhanced) chkSyncFromEnhanced.checked = true;
+    origZoomCtrl.resetZoom();
+    enhancedZoomCtrl.resetZoom();
+    previewDialog.showModal();
+    return;
+  }
+
   previewDialogTitle.textContent = `原图 vs 增强结果对比 — ${getTaskDisplayName(task)}`;
   const dims = task.enhancedDimensions
     ? `${task.enhancedDimensions[0]}×${task.enhancedDimensions[1]}px`
@@ -2941,6 +3008,7 @@ async function initWorkbench() {
     selectedMaxRetries,
     overwriteOriginal,
     numericNameOnly,
+    filterSub2K,
     stopOnFailure,
     completeNotifyAudio,
     completeAudioPreset,
@@ -2962,6 +3030,7 @@ async function initWorkbench() {
     'selectedMaxRetries',
     'overwriteOriginal',
     'numericNameOnly',
+    'filterSub2K',
     'stopOnFailure',
     'completeNotifyAudio',
     'completeAudioPreset',
@@ -3011,6 +3080,46 @@ async function initWorkbench() {
       }
       renderTaskList();
       updateDirStatusBanner();
+    });
+  }
+
+  if (chkFilterSub2K) {
+    chkFilterSub2K.checked = filterSub2K !== undefined ? Boolean(filterSub2K) : true;
+    chkFilterSub2K.addEventListener('change', async () => {
+      chrome.storage.local.set({ filterSub2K: chkFilterSub2K.checked });
+      const enabled = chkFilterSub2K.checked;
+      let ignoredCount = 0;
+      let restoredCount = 0;
+      for (const t of appState.tasks) {
+        if (!t.sourceDimensions && t.sourceBlob) {
+          try {
+            if (typeof createImageBitmap === 'function') {
+              const bmp = await createImageBitmap(t.sourceBlob);
+              t.sourceDimensions = [bmp.width, bmp.height];
+              bmp.close();
+            }
+          } catch {}
+        }
+        if (enabled) {
+          if (t.status === 'PENDING' && t.sourceDimensions && !isSub2KDimensions(t.sourceDimensions[0], t.sourceDimensions[1])) {
+            t.status = 'IGNORED';
+            await saveTaskToDb(t);
+            ignoredCount++;
+          }
+        } else {
+          if (t.status === 'IGNORED') {
+            t.status = 'PENDING';
+            await saveTaskToDb(t);
+            restoredCount++;
+          }
+        }
+      }
+      renderTaskList();
+      if (enabled && ignoredCount > 0) {
+        queueLiveStepText.textContent = `已开启“只处理低于2K的图片”，自动将 ${ignoredCount} 张达到或超过2K的图片标记为“不处理”。`;
+      } else if (!enabled && restoredCount > 0) {
+        queueLiveStepText.textContent = `已关闭“只处理低于2K的图片”，已将 ${restoredCount} 张图片恢复为“待处理”。`;
+      }
     });
   }
 
@@ -3822,6 +3931,8 @@ async function initWorkbench() {
       notifyAudio: chkNotifyAudio ? chkNotifyAudio.checked : true,
       audioSoundPreset: selectAudioPreset?.value || 'classic',
       notifyDesktop: chkNotifyDesktop ? chkNotifyDesktop.checked : true,
+      numericNameOnly: chkNumericNameOnly ? chkNumericNameOnly.checked : true,
+      filterSub2K: chkFilterSub2K ? chkFilterSub2K.checked : true,
       stopOnFailure: chkStopOnFailure ? chkStopOnFailure.checked : true
     });
     configSavedHint.textContent = '配置已保存！';

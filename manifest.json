@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Antigravity Flow Image Automator",
-  "version": "0.3.21",
+  "version": "0.3.22",
   "description": "Bulk AI product image enhancement workbench and non-DOM protocol engine for Google Flow.",
   "icons": {
     "16": "icons/icon-16.png",

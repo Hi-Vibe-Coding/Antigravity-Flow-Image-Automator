@@ -13,7 +13,7 @@
     <div class="brand">
       <img src="../icons/icon-48.png" alt="Logo" class="brand-logo" width="32" height="32">
       <div>
-        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.21</span></h1>
+        <h1>Antigravity Flow Image Automator <span class="version-tag">v0.3.22</span></h1>
         <p class="subtitle">Google Flow 批量电商产品图增强工作台</p>
       </div>
     </div>
@@ -122,6 +122,10 @@
             <label class="toolbar-checkbox-pill" title="勾选后仅扫描并处理文件名为纯数字的图片（如 1.png、2.jpg、10.webp）">
               <input id="chkNumericNameOnly" type="checkbox" checked>
               <span>只处理纯数字图片 (如 1.png)</span>
+            </label>
+            <label class="toolbar-checkbox-pill" title="勾选后（默认）：仅对宽或高小于 2048 像素的图片执行AI生图与2K超分放大；若图片已达到或超过 2K，则在列表中标记为“不处理”">
+              <input id="chkFilterSub2K" type="checkbox" checked>
+              <span>只处理低于2K的图片</span>
             </label>
             <label class="toolbar-checkbox-pill" title="勾选后（默认）：一旦队列中有单张图片处理失败，立即自动暂停队列并弹出提醒框，支持声音/桌面/微信通知">
               <input id="chkStopOnFailure" type="checkbox" checked>
