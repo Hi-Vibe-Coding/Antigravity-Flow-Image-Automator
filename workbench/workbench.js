@@ -27,6 +27,7 @@ const IDB_STORE_HANDLES = 'handles';
 const appState = {
   inputDirHandle: null,
   outputDirHandle: null,
+  folderHandlesByName: new Map(),
   tasks: [],
   capturedPackets: [],
   protocolSummary: {},
@@ -808,6 +809,11 @@ async function ensureDirReadWritePermission(dirHandle) {
 async function ensureOutputDirPermission() {
   const handlesToVerify = new Set();
   if (appState.inputDirHandle) handlesToVerify.add(appState.inputDirHandle);
+  if (appState.folderHandlesByName) {
+    for (const h of appState.folderHandlesByName.values()) {
+      if (h) handlesToVerify.add(h);
+    }
+  }
   for (const t of appState.tasks) {
     if (t.status === 'PENDING' && t.sourceDirHandle) {
       handlesToVerify.add(t.sourceDirHandle);
@@ -922,6 +928,11 @@ async function restoreTasksFromDb() {
 
       const thumbUrl = rec.sourceBlob ? URL.createObjectURL(rec.sourceBlob) : '';
       const enhancedThumbUrl = rec.enhancedBlob ? URL.createObjectURL(rec.enhancedBlob) : '';
+
+      if (rec.sourceDirHandle && rec.sourceDirHandle.name) {
+        if (!appState.folderHandlesByName) appState.folderHandlesByName = new Map();
+        appState.folderHandlesByName.set(rec.sourceDirHandle.name, rec.sourceDirHandle);
+      }
 
       return {
         ...rec,
@@ -1232,7 +1243,19 @@ async function extractFilesFromDataTransfer(dataTransfer) {
       } catch {
         entry = null;
       }
-      entryPairs.push({ item, entry });
+
+      let handlePromise = null;
+      if (typeof item.getAsFileSystemHandle === 'function') {
+        try {
+          handlePromise = item.getAsFileSystemHandle().catch(() => null);
+        } catch {
+          handlePromise = Promise.resolve(null);
+        }
+      } else {
+        handlePromise = Promise.resolve(null);
+      }
+
+      entryPairs.push({ item, entry, handlePromise });
     }
   }
 
@@ -1253,10 +1276,10 @@ async function extractFilesFromDataTransfer(dataTransfer) {
 
   // 4. If a directory was dropped, try modern File System Access API first to preserve directory handles
   let droppedDirHandle = null;
-  for (const { item, entry } of entryPairs) {
-    if (entry && entry.isDirectory && typeof item.getAsFileSystemHandle === 'function') {
+  for (const { entry, handlePromise } of entryPairs) {
+    if (entry && entry.isDirectory && handlePromise) {
       try {
-        const handle = await item.getAsFileSystemHandle();
+        const handle = await handlePromise;
         if (handle && handle.kind === 'directory') {
           droppedDirHandle = handle;
           break;
@@ -1340,7 +1363,11 @@ async function extractFilesFromDataTransfer(dataTransfer) {
 async function extractFoldersFromDataTransfer(dataTransfer) {
   if (!dataTransfer) return [];
   const rawItems = dataTransfer.items ? Array.from(dataTransfer.items) : [];
-  const entryPairs = [];
+
+  // CRITICAL: Call getAsFileSystemHandle() and webkitGetAsEntry() SYNCHRONOUSLY
+  // on every item before any await yields the event loop!
+  // Chromium detaches and invalidates DataTransferItems immediately on any microtask/macrotask yield.
+  const inspectedItems = [];
   for (const item of rawItems) {
     if (item.kind === 'file') {
       let entry = null;
@@ -1351,31 +1378,53 @@ async function extractFoldersFromDataTransfer(dataTransfer) {
       } catch {
         entry = null;
       }
-      entryPairs.push({ item, entry });
+
+      let handlePromise = null;
+      if (typeof item.getAsFileSystemHandle === 'function') {
+        try {
+          handlePromise = item.getAsFileSystemHandle().catch((err) => {
+            console.warn('[DragDrop] getAsFileSystemHandle promise rejected:', err);
+            return null;
+          });
+        } catch (err) {
+          console.warn('[DragDrop] synchronous getAsFileSystemHandle call failed:', err);
+          handlePromise = Promise.resolve(null);
+        }
+      } else {
+        handlePromise = Promise.resolve(null);
+      }
+
+      inspectedItems.push({ entry, handlePromise });
     }
   }
 
-  const folderEntries = entryPairs.filter((p) => p.entry && p.entry.isDirectory);
+  // Filter for directory entries
+  const folderInspectors = inspectedItems.filter((p) => p.entry && p.entry.isDirectory);
   const results = [];
 
-  for (const { item, entry } of folderEntries) {
+  for (const { entry, handlePromise } of folderInspectors) {
     let handle = null;
-    if (typeof item.getAsFileSystemHandle === 'function') {
-      try {
-        const h = await item.getAsFileSystemHandle();
-        if (h && h.kind === 'directory') {
-          handle = h;
-        }
-      } catch {
-        // Ignore
+    try {
+      const h = await handlePromise;
+      if (h && h.kind === 'directory') {
+        handle = h;
       }
+    } catch {
+      handle = null;
     }
+
+    const folderName = (handle && handle.name) || (entry && entry.name) || '未命名文件夹';
     results.push({
       id: `folder_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      name: (handle && handle.name) || (entry && entry.name) || '未命名文件夹',
+      name: folderName,
       handle,
       entry
     });
+
+    if (handle) {
+      if (!appState.folderHandlesByName) appState.folderHandlesByName = new Map();
+      appState.folderHandlesByName.set(folderName, handle);
+    }
   }
 
   return results;
@@ -1413,9 +1462,28 @@ async function scanDirectoryHandleForImages(rootDirHandle, onProgress = null) {
 async function scanDirectoryEntryForImages(dirEntry, onProgress = null) {
   const results = [];
   const rootFolderName = (dirEntry && dirEntry.name) || '';
-  async function walk(entry, relPrefix = '') {
-    if (entry.isFile) {
-      if (isSupportedImageFile(entry.name)) {
+  async function walkDirEntry(currentDirEntry, relPrefix = '') {
+    const reader = currentDirEntry.createReader();
+    const readAllEntries = async () => {
+      const all = [];
+      const readBatch = async () => {
+        const batch = await new Promise((resolve) =>
+          reader.readEntries(resolve, () => resolve([]))
+        );
+        if (batch && batch.length > 0) {
+          all.push(...batch);
+          await readBatch();
+        }
+      };
+      await readBatch();
+      return all;
+    };
+
+    const entries = await readAllEntries();
+    entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+    for (const entry of entries) {
+      if (entry.isFile && isSupportedImageFile(entry.name)) {
         const file = await new Promise((resolve) => entry.file(resolve, () => resolve(null)));
         if (file) {
           results.push({
@@ -1427,24 +1495,12 @@ async function scanDirectoryEntryForImages(dirEntry, onProgress = null) {
             onProgress(results.length, entry.name);
           }
         }
+      } else if (entry.isDirectory) {
+        await walkDirEntry(entry, relPrefix ? `${relPrefix}/${entry.name}` : entry.name);
       }
-    } else if (entry.isDirectory) {
-      const reader = entry.createReader();
-      const readBatch = async () => {
-        const batch = await new Promise((resolve) =>
-          reader.readEntries(resolve, () => resolve([]))
-        );
-        if (batch && batch.length > 0) {
-          for (const sub of batch) {
-            await walk(sub, relPrefix ? `${relPrefix}/${sub.name}` : sub.name);
-          }
-          await readBatch();
-        }
-      };
-      await readBatch();
     }
   }
-  await walk(dirEntry, rootFolderName);
+  await walkDirEntry(dirEntry, rootFolderName);
   return results;
 }
 
@@ -1506,6 +1562,10 @@ function stageFolder(folderObj) {
     return;
   }
   stagedFolders.push(folderObj);
+  if (folderObj.handle) {
+    if (!appState.folderHandlesByName) appState.folderHandlesByName = new Map();
+    appState.folderHandlesByName.set(folderObj.name, folderObj.handle);
+  }
   renderFolderStagingUI();
   updateDirStatusBanner();
   queueLiveStepText.textContent = `已添加待扫描文件夹: [${folderObj.name}]（当前共 ${stagedFolders.length} 个文件夹待扫描）。请点击右下角“确定扫描”开始解析图片。`;
@@ -1554,6 +1614,8 @@ async function executeScanStagedFolders() {
           appState.inputDirHandle = f.handle;
           await saveDirHandleToDb('inputDirHandle', f.handle);
         }
+        if (!appState.folderHandlesByName) appState.folderHandlesByName = new Map();
+        appState.folderHandlesByName.set(f.name, f.handle);
         const scanned = await scanDirectoryHandleForImages(f.handle, onProgress);
         allScannedItems.push(...scanned);
       } else if (f.entry) {
@@ -1860,7 +1922,11 @@ function renderTaskList() {
 
     const sizeKb = (task.size / 1024).toFixed(1);
     const outName = buildOutputFileName(task.name, selectResolution.value, 'image/jpeg');
-    const folderTag = task.sourceDirHandle?.name ? `[📁 ${task.sourceDirHandle.name}] ` : '';
+    let folderName = task.sourceDirHandle?.name || '';
+    if (!folderName && task.relativePath && task.relativePath.includes('/')) {
+      folderName = task.relativePath.split('/')[0];
+    }
+    const folderTag = folderName ? `[📁 ${folderName}] ` : '';
     let overwriteDesc;
     if (isOverwriteModeEnabled()) {
       overwriteDesc =
@@ -2266,8 +2332,32 @@ async function verifyAndMeasureImageBlob(blob) {
 
 async function saveEnhancedBlobToDisk(blob, outputFileName, task = null) {
   // 1. Prefer overwriting in the original image's source folder (or user-selected directory)
-  const targetDirHandle =
-    task?.sourceDirHandle || appState.inputDirHandle || appState.outputDirHandle;
+  let targetDirHandle = task?.sourceDirHandle || null;
+
+  // If task has relativePath (e.g. "E1-026/1.png"), match the exact root folder handle
+  if (!targetDirHandle && task?.relativePath) {
+    const rootFolderName = task.relativePath.split('/')[0];
+    if (rootFolderName && appState.folderHandlesByName?.has(rootFolderName)) {
+      targetDirHandle = appState.folderHandlesByName.get(rootFolderName);
+    }
+  }
+
+  // Only fall back to appState.inputDirHandle IF the folder name matches (to prevent cross-folder overwrites!)
+  if (!targetDirHandle && appState.inputDirHandle) {
+    if (task?.relativePath) {
+      const rootFolderName = task.relativePath.split('/')[0];
+      if (rootFolderName === appState.inputDirHandle.name) {
+        targetDirHandle = appState.inputDirHandle;
+      }
+    } else {
+      targetDirHandle = appState.inputDirHandle;
+    }
+  }
+
+  // Finally fall back to user-configured output directory
+  if (!targetDirHandle && appState.outputDirHandle) {
+    targetDirHandle = appState.outputDirHandle;
+  }
 
   if (targetDirHandle) {
     try {
@@ -2307,12 +2397,18 @@ async function saveEnhancedBlobToDisk(blob, outputFileName, task = null) {
     }
   }
 
-  // 2. Fallback to chrome.downloads into Flow_Enhanced/ subfolder (for loose clipboard/dragged images without folder handle)
+  // 2. Fallback to chrome.downloads into Flow_Enhanced/ preserving folder hierarchy
   const tempUrl = URL.createObjectURL(blob);
   try {
+    let downloadFilename = `Flow_Enhanced/${outputFileName}`;
+    if (task?.relativePath) {
+      const parts = task.relativePath.split('/');
+      parts[parts.length - 1] = outputFileName;
+      downloadFilename = `Flow_Enhanced/${parts.join('/')}`;
+    }
     const downloadId = await chrome.downloads.download({
       url: tempUrl,
-      filename: `Flow_Enhanced/${outputFileName}`,
+      filename: downloadFilename,
       conflictAction: 'uniquify',
       saveAs: false
     });

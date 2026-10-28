@@ -160,7 +160,7 @@
 
 ```text
 Antigravity-Flow-Image-Automator/
-├── manifest.json                 # Chrome MV3 扩展清单 (v0.3.20)
+├── manifest.json                 # Chrome MV3 扩展清单 (v0.3.21)
 ├── README.md                     # 项目完整说明文档
 ├── background/
 │   └── service-worker.js         # MV3 后台服务工作线程（连接管理、标签页调度与协议日志持久化）
